@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>נוכחות+</title>
+<link rel="preload" as="image" href="icon-192.png" fetchpriority="high">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="נוכחות+">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="format-detection" content="telephone=no">
+<meta name="theme-color" id="themeColorMeta" content="#0d1622">
+<script>
+// Apply saved theme instantly to prevent Flash of Unstyled Content (FOUC)
+(function(){
+  try{
+    var cached = JSON.parse(localStorage.getItem('nc_theme_cache'));
+    var mode = (cached && cached.themeMode) ? cached.themeMode : 'system';
+    if(mode === 'system'){
+      mode = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', mode);
+    document.documentElement.setAttribute('data-accent', (cached && cached.accentColor) ? cached.accentColor : 'bronze');
+    var meta = document.getElementById('themeColorMeta');
+    if(meta) meta.setAttribute('content', mode === 'dark' ? '#0d1622' : '#f2f4f7');
+  }catch(e){
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+})();
+</script>
+<link rel="dns-prefetch" href="//ojzemdselyxxscbbvssm.supabase.co">
+<link rel="preconnect" href="https://ojzemdselyxxscbbvssm.supabase.co" crossorigin>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="initial-splash" id="initialSplash" aria-live="polite">
+  <div class="splash-inner">
+    <img class="splash-logo" src="icon-192.png" alt="">
+    <p class="splash-title">נוכחות+</p>
+    <p class="splash-sub">טוען נתונים…</p>
+    <span class="splash-dot" aria-hidden="true"></span>
+  </div>
+</div>
+<div class="auth-screen" id="authScreen" style="display:none;">
+  <div class="auth-card">
+    <img class="brand-mark auth-mark" src="icon-192.png" alt="">
+    <h1>נוכחות+</h1>
+    <p class="auth-sub">התחברות לחשבון האישי שלך</p>
+    <form id="authForm">
+      <label>אימייל <input type="email" id="authEmail" required></label>
+      <label>סיסמה <input type="password" id="authPassword" required minlength="6"></label>
+      <button type="submit" id="authSubmitBtn">התחברות</button>
+    </form>
+    <button type="button" id="authToggleMode" class="auth-toggle-link">אין לך חשבון? הרשמה</button>
+    <p id="authError" class="auth-msg auth-error" hidden></p>
+    <p id="authInfo" class="auth-msg auth-info" hidden></p>
+  </div>
+</div>
+<div class="app" id="appRoot" hidden>
+  <header class="topbar">
+    <button class="icon-btn" id="signOutBtn" aria-label="התנתקות" title="התנתקות"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/></svg></button>
+    <div class="brand">
+      <div>
+        <h1>נוכחות+</h1>
+        <p class="brand-sub">מעקב שעות ושכר משוער</p>
+      </div>
+      <img class="brand-mark" src="icon-192.png" alt="">
+    </div>
+    <button class="icon-btn" id="settingsToggle" aria-label="הגדרות" title="הגדרות"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5ZM19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.09A1.7 1.7 0 0 0 9 19.35a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.07 14H3v-4h.09A1.7 1.7 0 0 0 4.65 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63 1.7 1.7 0 0 0 10.07 3H10V3h4v.09A1.7 1.7 0 0 0 15 4.65a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9 1.7 1.7 0 0 0 20.93 10H21v4h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg></button>
+  </header>
+
+  <main id="mainContent"></main>
+
+  <aside class="settings-drawer" id="settingsDrawer" role="dialog" aria-modal="true" aria-label="הגדרות">
+    <div class="settings-handle" aria-hidden="true"></div>
+    <div class="settings-head">
+      <h2>הגדרות</h2>
+      <button type="button" class="settings-close" id="settingsClose" aria-label="סגירת הגדרות">✕</button>
+    </div>
+
+    <h3>מראה</h3>
+    <div class="theme-mode-toggle">
+      <button type="button" class="theme-mode-btn" data-mode="system">📱 מערכת</button>
+      <button type="button" class="theme-mode-btn" data-mode="dark">🌙 כהה</button>
+      <button type="button" class="theme-mode-btn" data-mode="light">☀️ בהיר</button>
+    </div>
+    <div class="accent-swatches">
+      <button type="button" class="accent-swatch" data-accent="bronze" style="background:linear-gradient(155deg,#d4ac72,#b8935a)" title="ברונזה עתיקה"></button>
+      <button type="button" class="accent-swatch" data-accent="copper" style="background:linear-gradient(155deg,#e0a37c,#c17f5a)" title="נחושת חמימה"></button>
+      <button type="button" class="accent-swatch" data-accent="teal" style="background:linear-gradient(155deg,#4db3ad,#2b8a86)" title="טורקיז כהה"></button>
+    </div>
+
+    <label>שכר שעתי (₪)
+      <input type="number" id="setRate" step="0.01">
+    </label>
+    <label>שעות רגילות ליום
+      <input type="number" id="setRegularHours" step="0.5">
+    </label>
+    <label>שעות ב-125% ליום (אחרי הרגילות)
+      <input type="number" id="setOt125Hours" step="0.5">
+    </label>
+    <label>תקרת שעות בחודש (לתשלום)
+      <input type="number" id="setMonthlyCap" step="1">
+    </label>
+    <label>דקות הפסקה פטורות ביום (בתשלום)
+      <input type="number" id="setFreeBreak" step="1">
+    </label>
+
+    <h3>רכיבי ניכוי מהברוטו (%)</h3>
+    <div id="deductionsSettings"></div>
+    <button id="addDeduction" type="button">+ הוסף רכיב ניכוי</button>
+
+    <h3>תוספות קבועות לשכר (₪ לחודש)</h3>
+    <div id="additionsSettings"></div>
+    <button id="addAddition" type="button">+ הוסף תוספת</button>
+
+    <h3>התראות</h3>
+    <p class="push-status" id="pushStatusText">בודק סטטוס…</p>
+    <button id="pushToggleBtn" type="button">הפעל התראות פוש</button>
+    <p class="settings-note" id="pushExplainText">כשמופעל, תקבל התראה 10 דקות לפני שההפסקה שלך מסתיימת — גם כשהמסך נעול.</p>
+    <label>התראה כשנשארו X שעות לתקרה החודשית
+      <input type="number" id="setCapWarnHours" step="1" min="0">
+    </label>
+
+    <button id="saveSettings" type="button">שמור הגדרות</button>
+    <button id="resetData" type="button">איפוס כל הנתונים</button>
+    <p class="settings-note">כל הנתונים נשמרים בחשבון שלך בענן ולא רק על המכשיר — הם יהיו זמינים מכל מכשיר שבו תתחבר.</p>
+  </aside>
+  <div class="drawer-overlay" id="drawerOverlay" hidden></div>
+  <div class="toast" id="toast"></div>
+</div>
+
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="app.js"></script>
+</body>
+</html>
