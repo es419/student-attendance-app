@@ -423,7 +423,13 @@ async function refreshTelegramUI(){
 }
 
 async function createTelegramLinkCode(){
-  if(!currentUserId) return;
+  if(!currentUserId){
+    showToast('החיבור לחשבון עדיין לא מוכן. סגור ופתח את האפליקציה ונסה שוב.');
+    return;
+  }
+
+  const button = $('#telegramConnectBtn');
+  if(button) button.disabled = true;
   const code = makeTelegramLinkCode();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
   try{
@@ -440,6 +446,8 @@ async function createTelegramLinkCode(){
   }catch(e){
     console.error('createTelegramLinkCode error', e);
     showToast('לא הצלחנו ליצור קוד. ודא שהעדכון ב-Supabase הותקן.');
+  }finally{
+    if(button) button.disabled = false;
   }
 }
 

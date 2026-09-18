@@ -1,11 +1,11 @@
-const CACHE_NAME = 'attendance-shell-v10';
+const CACHE_NAME = 'attendance-shell-v11';
 const SUPABASE_LIB = 'https://unpkg.com/@supabase/supabase-js@2.109.0/dist/umd/supabase.js';
 
 const APP_SHELL = [
   './',
   './index.html',
   './styles.css',
-  './app.js',
+  './app.js?v=telegram-v1',
   './manifest.json',
   './icon-180.png',
   './icon-192.png',
