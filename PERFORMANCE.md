@@ -17,3 +17,12 @@ This build keeps Supabase and optimizes the startup path instead of migrating ba
 ## Expected effect
 
 On repeat launches, UI rendering no longer waits for a Supabase round trip. On a first launch/login, the shell appears immediately and the data fills in when the single initial query returns.
+
+## Instant-launch cache update
+
+- Navigation now uses the cached `index.html` immediately and refreshes it in the background instead of waiting on the network.
+- Service-worker registration starts in `index.html`, before the Supabase runtime is requested.
+- The Supabase browser runtime is version-pinned and pre-cached by the service worker; repeat launches no longer need the CDN to start the app.
+- Static app-shell assets still use stale-while-revalidate, so cached files render immediately while fresh copies are prepared for later requests.
+- Old attendance shell caches are removed without deleting unrelated caches on the same origin.
+- Attendance writes remain server-confirmed; no optimistic/fake confirmation was added to check-in or check-out.

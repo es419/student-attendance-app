@@ -33,6 +33,17 @@
   }
 })();
 </script>
+<script>
+// Start service-worker registration before remote dependencies so repeat launches can use the cached app shell immediately.
+if ('serviceWorker' in navigator) {
+  window.__attendanceSwRegistrationPromise = navigator.serviceWorker
+    .register('./sw.js', { updateViaCache: 'none' })
+    .catch(function(error){
+      console.error('service worker registration failed', error);
+      return null;
+    });
+}
+</script>
 <link rel="dns-prefetch" href="//ojzemdselyxxscbbvssm.supabase.co">
 <link rel="preconnect" href="https://ojzemdselyxxscbbvssm.supabase.co" crossorigin>
 <link rel="stylesheet" href="styles.css">
@@ -135,7 +146,7 @@
   <div class="toast" id="toast"></div>
 </div>
 
-<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2.109.0/dist/umd/supabase.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

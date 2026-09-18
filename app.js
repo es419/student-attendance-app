@@ -115,7 +115,14 @@ function urlBase64ToUint8Array(base64String){
 async function registerServiceWorker(){
   if(!('serviceWorker' in navigator)) return null;
   try{
-    swRegistration = await navigator.serviceWorker.register('./sw.js');
+    // index.html starts registration as early as possible. Reuse that promise here
+    // so push notifications and the rest of the app share one registration.
+    if(window.__attendanceSwRegistrationPromise){
+      swRegistration = await window.__attendanceSwRegistrationPromise;
+    }
+    if(!swRegistration){
+      swRegistration = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
+    }
     return swRegistration;
   }catch(e){
     console.error('service worker registration failed', e);
