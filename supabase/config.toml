@@ -1,0 +1,2 @@
+[functions.attendance-telegram]
+verify_jwt = false

@@ -779,3 +779,35 @@
   @media (prefers-reduced-motion:reduce){
     *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important;}
   }
+
+
+/* Telegram companion */
+.telegram-link-box{
+  margin-top:10px;
+  padding:12px;
+  border:1px solid var(--border);
+  border-radius:14px;
+  background:var(--surface-2, rgba(127,127,127,.08));
+}
+.telegram-command-row{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  direction:ltr;
+}
+.telegram-command-row code{
+  flex:1;
+  min-width:0;
+  overflow:auto;
+  white-space:nowrap;
+  padding:10px 12px;
+  border-radius:10px;
+  background:rgba(127,127,127,.12);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:.9rem;
+}
+.telegram-command-row button{
+  flex:0 0 auto;
+  width:auto;
+  margin:0;
+}

@@ -130,6 +130,19 @@ if ('serviceWorker' in navigator) {
     <div id="additionsSettings"></div>
     <button id="addAddition" type="button">+ הוסף תוספת</button>
 
+    <h3>Telegram</h3>
+    <p class="push-status" id="telegramStatusText">בודק סטטוס…</p>
+    <button id="telegramConnectBtn" type="button">צור קוד חיבור לטלגרם</button>
+    <div class="telegram-link-box" id="telegramLinkBox" hidden>
+      <p class="settings-note">שלח לבוט את הפקודה הבאה בתוך 10 דקות:</p>
+      <div class="telegram-command-row">
+        <code id="telegramLinkCommand" dir="ltr"></code>
+        <button id="telegramCopyBtn" type="button">העתק</button>
+      </div>
+    </div>
+    <button id="telegramDisconnectBtn" type="button" hidden>נתק את Telegram</button>
+    <p class="settings-note">הבוט משתמש באותו חשבון ואותם נתוני נוכחות. החיבור נעשה עם קוד חד-פעמי ולא חושף סיסמה.</p>
+
     <h3>התראות</h3>
     <p class="push-status" id="pushStatusText">בודק סטטוס…</p>
     <button id="pushToggleBtn" type="button">הפעל התראות פוש</button>

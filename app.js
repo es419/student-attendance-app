@@ -330,6 +330,19 @@ async function kvGet(key){
   }
 }
 
+async function kvGetStrict(key){
+  const userId = currentUserId;
+  if(!userId) throw new Error('No authenticated user');
+  const { data, error } = await supabaseClient
+    .from('kv_store')
+    .select('value')
+    .eq('user_id', userId)
+    .eq('key', key)
+    .maybeSingle();
+  if(error) throw error;
+  return data ? data.value : null;
+}
+
 async function kvSet(key, value){
   try{
     const userId = currentUserId;
@@ -353,6 +366,94 @@ async function kvDelete(key){
     if(error) throw error;
   }catch(e){
     console.error('kvDelete error', e);
+  }
+}
+
+// ---- Telegram companion ----
+function makeTelegramLinkCode(){
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => alphabet[b % alphabet.length]).join('');
+}
+
+async function getTelegramLink(){
+  if(!currentUserId) return null;
+  try{
+    const { data, error } = await supabaseClient
+      .from('telegram_links')
+      .select('telegram_username,telegram_first_name,linked_at')
+      .eq('user_id', currentUserId)
+      .maybeSingle();
+    if(error) throw error;
+    return data || null;
+  }catch(e){
+    console.error('getTelegramLink error', e);
+    return null;
+  }
+}
+
+async function refreshTelegramUI(){
+  const status = $('#telegramStatusText');
+  const connectBtn = $('#telegramConnectBtn');
+  const disconnectBtn = $('#telegramDisconnectBtn');
+  const box = $('#telegramLinkBox');
+  if(!status || !connectBtn || !disconnectBtn || !box) return;
+
+  status.textContent = 'בודק סטטוס…';
+  try{
+    const link = await getTelegramLink();
+    if(link){
+      const name = link.telegram_username ? `@${link.telegram_username}` : (link.telegram_first_name || 'חשבון Telegram');
+      status.textContent = `Telegram מחובר: ${name} ✓`;
+      status.className = 'push-status on';
+      connectBtn.hidden = true;
+      disconnectBtn.hidden = false;
+      box.hidden = true;
+    }else{
+      status.textContent = 'Telegram עדיין לא מחובר';
+      status.className = 'push-status off';
+      connectBtn.hidden = false;
+      disconnectBtn.hidden = true;
+    }
+  }catch(e){
+    status.textContent = 'לא ניתן לבדוק את חיבור Telegram';
+    status.className = 'push-status blocked';
+  }
+}
+
+async function createTelegramLinkCode(){
+  if(!currentUserId) return;
+  const code = makeTelegramLinkCode();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  try{
+    const { error } = await supabaseClient.from('telegram_link_codes').upsert({
+      user_id: currentUserId,
+      code,
+      expires_at: expiresAt,
+      created_at: new Date().toISOString()
+    }, { onConflict: 'user_id' });
+    if(error) throw error;
+    $('#telegramLinkCommand').textContent = `/link ${code}`;
+    $('#telegramLinkBox').hidden = false;
+    showToast('קוד חיבור נוצר ל-10 דקות');
+  }catch(e){
+    console.error('createTelegramLinkCode error', e);
+    showToast('לא הצלחנו ליצור קוד. ודא שהעדכון ב-Supabase הותקן.');
+  }
+}
+
+async function disconnectTelegram(){
+  if(!currentUserId) return;
+  try{
+    const { error } = await supabaseClient.from('telegram_links').delete().eq('user_id', currentUserId);
+    if(error) throw error;
+    $('#telegramLinkBox').hidden = true;
+    showToast('Telegram נותק');
+    await refreshTelegramUI();
+  }catch(e){
+    console.error('disconnectTelegram error', e);
+    showToast('שגיאה בניתוק Telegram');
   }
 }
 
@@ -450,72 +551,125 @@ function isOnBreak(){
   return !last.end;
 }
 
+let shiftActionBusy = false;
+
+async function syncActiveSessionFromCloud(){
+  const userId = currentUserId;
+  if(!userId) throw new Error('No authenticated user');
+  const { data, error } = await supabaseClient
+    .from('kv_store')
+    .select('value')
+    .eq('user_id', userId)
+    .eq('key', 'activeSession')
+    .maybeSingle();
+  if(error) throw error;
+  activeSession = data ? data.value : null;
+  writeInitialCache(userId);
+}
+
+async function runShiftAction(action){
+  if(shiftActionBusy) return;
+  shiftActionBusy = true;
+  try{
+    // Telegram and another device can change the shift while this PWA is asleep.
+    // Re-read the authoritative active session before every attendance mutation.
+    await syncActiveSessionFromCloud();
+    await action();
+  }catch(e){
+    console.error('shift action failed', e);
+    showToast('לא ניתן לאמת את מצב המשמרת. בדוק חיבור ונסה שוב.');
+    render();
+  }finally{
+    shiftActionBusy = false;
+  }
+}
+
 async function clockIn(){
-  if(activeSession) return;
-  activeSession = { date: todayStr(), checkIn: nowTimeStr(), breaks: [] };
-  await saveActiveSession();
-  render();
-  showToast('המשמרת התחילה — בהצלחה!');
+  return runShiftAction(async () => {
+    if(activeSession){
+      render();
+      showToast('כבר קיימת משמרת פעילה');
+      return;
+    }
+    activeSession = { date: todayStr(), checkIn: nowTimeStr(), breaks: [] };
+    await saveActiveSession();
+    render();
+    showToast('המשמרת התחילה — בהצלחה!');
+  });
 }
 
 async function startBreak(){
-  if(!activeSession || isOnBreak()) return;
-  activeSession.breaks.push({ start: nowTimeStr(), end: null });
-  await saveActiveSession();
-  render();
-  showToast('יצאת להפסקה');
-  // schedule a push reminder for 10 minutes before the free break allowance runs out
-  const reminderId = await scheduleBreakReminder();
-  if(reminderId){
-    activeSession.breaks[activeSession.breaks.length-1].reminderId = reminderId;
+  return runShiftAction(async () => {
+    if(!activeSession){ render(); showToast('אין משמרת פעילה'); return; }
+    if(isOnBreak()){ render(); showToast('אתה כבר בהפסקה'); return; }
+    activeSession.breaks.push({ start: nowTimeStr(), end: null });
     await saveActiveSession();
-  }
+    render();
+    showToast('יצאת להפסקה');
+    // schedule a push reminder for 10 minutes before the free break allowance runs out
+    const reminderId = await scheduleBreakReminder();
+    if(reminderId){
+      activeSession.breaks[activeSession.breaks.length-1].reminderId = reminderId;
+      await saveActiveSession();
+    }
+  });
 }
 
 async function endBreak(){
-  if(!activeSession || !isOnBreak()) return;
-  const lastBreak = activeSession.breaks[activeSession.breaks.length-1];
-  lastBreak.end = nowTimeStr();
-  await cancelBreakReminder(lastBreak.reminderId);
-  await saveActiveSession();
-  render();
-  showToast('חזרת מהפסקה');
+  return runShiftAction(async () => {
+    if(!activeSession){ render(); showToast('אין משמרת פעילה'); return; }
+    if(!isOnBreak()){ render(); showToast('אתה לא בהפסקה כרגע'); return; }
+    const lastBreak = activeSession.breaks[activeSession.breaks.length-1];
+    lastBreak.end = nowTimeStr();
+    await cancelBreakReminder(lastBreak.reminderId);
+    await saveActiveSession();
+    render();
+    showToast('חזרת מהפסקה');
+  });
 }
 
 async function clockOut(){
-  if(!activeSession) return;
-  const checkOut = nowTimeStr();
-  if(isOnBreak()){
-    const lastBreak = activeSession.breaks[activeSession.breaks.length-1];
-    lastBreak.end = checkOut;
-    await cancelBreakReminder(lastBreak.reminderId);
-  }
-  const date = activeSession.date;
-  const checkIn = activeSession.checkIn;
-  const totalBreakMin = activeSession.breaks.reduce((sum,b) => {
-    const end = b.end || checkOut;
-    return sum + Math.max(0, timeToMinutes(end) - timeToMinutes(b.start));
-  }, 0);
+  return runShiftAction(async () => {
+    if(!activeSession){ render(); showToast('אין משמרת פעילה'); return; }
+    const checkOut = nowTimeStr();
+    if(isOnBreak()){
+      const lastBreak = activeSession.breaks[activeSession.breaks.length-1];
+      lastBreak.end = checkOut;
+      await cancelBreakReminder(lastBreak.reminderId);
+    }
+    const date = activeSession.date;
+    const checkIn = activeSession.checkIn;
+    const totalBreakMin = activeSession.breaks.reduce((sum,b) => {
+      const end = b.end || checkOut;
+      return sum + Math.max(0, timeToMinutes(end) - timeToMinutes(b.start));
+    }, 0);
 
-  if(timeToMinutes(checkOut) <= timeToMinutes(checkIn)){
-    showToast('שעת הסיום יצאה לפני ההתחלה — ערוך את היום ידנית ברשימה');
+    if(timeToMinutes(checkOut) <= timeToMinutes(checkIn)){
+      showToast('שעת הסיום יצאה לפני ההתחלה — ערוך את היום ידנית ברשימה');
+      activeSession = null;
+      await saveActiveSession();
+      render();
+      return;
+    }
+
+    // Always merge into the freshest month row so a Telegram/other-device edit
+    // cannot be overwritten by an older local snapshot.
+    const targetDate = new Date(date+'T00:00:00');
+    const targetKey = `attendance:${monthKey(targetDate)}`;
+    const latest = await kvGetStrict(targetKey);
+    const latestMonth = latest || { days:{} };
+    latestMonth.days[date] = { in: checkIn, out: checkOut, brk: totalBreakMin };
+    const ok = await kvSet(targetKey, latestMonth);
+    if(!ok) throw new Error('failed to save month');
+
+    if(monthKey(targetDate) !== monthKey(currentDate)) currentDate = targetDate;
+    monthData = latestMonth;
     activeSession = null;
     await saveActiveSession();
     render();
-    return;
-  }
-
-  if(date.slice(0,7) !== monthKey(currentDate)){
-    currentDate = new Date(date+'T00:00:00');
-    await loadMonth(currentDate);
-  }
-  monthData.days[date] = { in: checkIn, out: checkOut, brk: totalBreakMin };
-  await saveMonth(currentDate);
-  activeSession = null;
-  await saveActiveSession();
-  render();
-  showToast('המשמרת הסתיימה ונשמרה');
-  checkCapWarning();
+    showToast('המשמרת הסתיימה ונשמרה');
+    checkCapWarning();
+  });
 }
 
 function lpButton(id, extraClass, label){
@@ -1214,6 +1368,7 @@ function openSettings(){
   renderDeductionRows();
   renderAdditionRows();
   refreshPushStatusUI();
+  refreshTelegramUI();
   const overlay = $('#drawerOverlay');
   overlay.classList.add('pre-open');
   overlay.hidden = false;
@@ -1246,6 +1401,26 @@ document.querySelectorAll('.accent-swatch').forEach(btn => {
     updateThemeButtonsUI();
     await kvSet('settings', settings);
   });
+});
+
+$('#telegramConnectBtn').addEventListener('click', async () => {
+  await createTelegramLinkCode();
+});
+
+$('#telegramCopyBtn').addEventListener('click', async () => {
+  const command = $('#telegramLinkCommand').textContent || '';
+  if(!command) return;
+  try{
+    await navigator.clipboard.writeText(command);
+    showToast('פקודת החיבור הועתקה');
+  }catch(e){
+    showToast('לא ניתן להעתיק אוטומטית');
+  }
+});
+
+$('#telegramDisconnectBtn').addEventListener('click', async () => {
+  if(!confirm('לנתק את חשבון Telegram מנוכחות+?')) return;
+  await disconnectTelegram();
 });
 
 $('#pushToggleBtn').addEventListener('click', async () => {
@@ -1451,8 +1626,28 @@ function resetSignedOutState(){
   showAuthScreen();
 }
 
+let foregroundRefreshPromise = null;
+async function refreshFromCloud(){
+  if(!appStarted || !currentUserId) return;
+  if(foregroundRefreshPromise) return foregroundRefreshPromise;
+  foregroundRefreshPromise = (async () => {
+    try{
+      await loadInitialData(currentUserId);
+      render();
+    }catch(e){
+      console.error('foreground refresh failed', e);
+    }finally{
+      foregroundRefreshPromise = null;
+    }
+  })();
+  return foregroundRefreshPromise;
+}
+
 document.addEventListener('visibilitychange', () => {
-  if(document.visibilityState === 'visible' && appStarted) tickShiftTimer();
+  if(document.visibilityState === 'visible' && appStarted){
+    tickShiftTimer();
+    void refreshFromCloud(); // picks up Telegram / other-device attendance changes
+  }
 });
 
 async function bootstrap(){
