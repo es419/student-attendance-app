@@ -151,6 +151,24 @@ if ('serviceWorker' in navigator) {
       <input type="number" id="setCapWarnHours" step="1" min="0">
     </label>
 
+    <h3>תזכורות כניסה ויציאה</h3>
+    <label>תזכורות נוכחות
+      <select id="setAttendanceReminders">
+        <option value="on">פעילות</option>
+        <option value="off">כבויות</option>
+      </select>
+    </label>
+    <label>תזכורת כניסה
+      <input type="time" id="setCheckInReminderTime">
+    </label>
+    <label>תזכורת יציאה
+      <input type="time" id="setCheckOutReminderTime">
+    </label>
+    <label>תזכורת יציאה נוספת אחרי (דקות, 0 לביטול)
+      <input type="number" id="setCheckOutRepeatMinutes" min="0" step="5">
+    </label>
+    <p class="settings-note">כניסה: תזכורת אחת בימים א׳–ה׳ ורק כל עוד לא החתמת. יציאה: התזכורות נקבעות רק אחרי שנכנסת למשמרת ומתבטלות מיד כשאתה מחתים יציאה.</p>
+
     <button id="saveSettings" type="button">שמור הגדרות</button>
     <button id="resetData" type="button">איפוס כל הנתונים</button>
     <p class="settings-note">כל הנתונים נשמרים בחשבון שלך בענן ולא רק על המכשיר — הם יהיו זמינים מכל מכשיר שבו תתחבר.</p>
@@ -160,6 +178,6 @@ if ('serviceWorker' in navigator) {
 </div>
 
 <script src="https://unpkg.com/@supabase/supabase-js@2.109.0/dist/umd/supabase.js"></script>
-<script src="app.js?v=telegram-v1"></script>
+<script src="app.js?v=attendance-reminders-v1"></script>
 </body>
 </html>
