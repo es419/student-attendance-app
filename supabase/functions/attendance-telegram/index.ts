@@ -20,6 +20,10 @@ const DEFAULT_SETTINGS = {
   ot125Hours: 2,
   monthlyCap: 120,
   freeBreakMinutes: 40,
+  attendanceRemindersEnabled: true,
+  checkInReminderTime: "08:00",
+  checkOutReminderTime: "16:00",
+  checkOutRepeatMinutes: 30,
 };
 
 type TelegramUser = { id: number; username?: string; first_name?: string };
@@ -193,6 +197,60 @@ async function cancelReminder(reminderId?: string) {
   await db.from("break_reminders").delete().eq("id", reminderId).eq("sent", false);
 }
 
+const ATTENDANCE_REMINDER_MESSAGES = {
+  checkIn: "לא שכחת להחתים כניסה?",
+  checkOut: "לא שכחת להחתים יציאה?",
+  checkOutRepeat: "עדיין לא החתמת יציאה",
+};
+
+async function cancelAttendanceReminders(userId: string, messages: string[]) {
+  if (!messages.length) return;
+  await db.from("break_reminders")
+    .delete()
+    .eq("user_id", userId)
+    .eq("sent", false)
+    .in("message", messages);
+}
+
+async function scheduleTelegramClockOutReminders(
+  userId: string,
+  nowTime: string,
+  settings: Record<string, unknown>,
+) {
+  await cancelAttendanceReminders(userId, [
+    ATTENDANCE_REMINDER_MESSAGES.checkOut,
+    ATTENDANCE_REMINDER_MESSAGES.checkOutRepeat,
+  ]);
+  if (settings.attendanceRemindersEnabled === false) return;
+
+  const { count } = await db.from("push_subscriptions")
+    .select("endpoint", { count: "exact", head: true })
+    .eq("user_id", userId);
+  if (!count) return;
+
+  const target = String(settings.checkOutReminderTime || "16:00");
+  const deltaMinutes = timeToMinutes(target) - timeToMinutes(nowTime);
+  const repeatMinutes = Math.max(0, Number(settings.checkOutRepeatMinutes) || 0);
+  const rows: Array<{ user_id: string; fire_at: string; message: string }> = [];
+
+  if (deltaMinutes > 0) {
+    const first = new Date(Date.now() + deltaMinutes * 60_000);
+    rows.push({
+      user_id: userId,
+      fire_at: first.toISOString(),
+      message: ATTENDANCE_REMINDER_MESSAGES.checkOut,
+    });
+    if (repeatMinutes > 0) {
+      rows.push({
+        user_id: userId,
+        fire_at: new Date(first.getTime() + repeatMinutes * 60_000).toISOString(),
+        message: ATTENDANCE_REMINDER_MESSAGES.checkOutRepeat,
+      });
+    }
+  }
+  if (rows.length) await db.from("break_reminders").insert(rows);
+}
+
 async function performAction(userId: string, action: string) {
   const state = await loadState(userId);
   let session = state.activeSession;
@@ -202,6 +260,8 @@ async function performAction(userId: string, action: string) {
     if (session) return "כבר קיימת משמרת פעילה.";
     session = { date: now.date, checkIn: now.time, breaks: [] };
     await setKv(userId, "activeSession", session);
+    await cancelAttendanceReminders(userId, [ATTENDANCE_REMINDER_MESSAGES.checkIn]);
+    await scheduleTelegramClockOutReminders(userId, now.time, state.settings);
     return `נכנסת למשמרת ב-${now.time} 🟢`;
   }
 
@@ -227,6 +287,10 @@ async function performAction(userId: string, action: string) {
   if (action === "clock_out") {
     if (!session) return "אין כרגע משמרת פעילה.";
     const checkout = now.time;
+    await cancelAttendanceReminders(userId, [
+      ATTENDANCE_REMINDER_MESSAGES.checkOut,
+      ATTENDANCE_REMINDER_MESSAGES.checkOutRepeat,
+    ]);
     if (isOnBreak(session)) {
       const last = session.breaks[session.breaks.length - 1];
       last.end = checkout;
