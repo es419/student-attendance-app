@@ -27,6 +27,10 @@ const DEFAULT_SETTINGS = {
   monthlyCap: 120,
   freeBreakMinutes: 40,
   capWarnHours: 10,
+  attendanceRemindersEnabled: true,
+  checkInReminderTime: '08:00',
+  checkOutReminderTime: '16:00',
+  checkOutRepeatMinutes: 30,
   themeMode: 'system',
   accentColor: 'bronze',
   deductions: [
@@ -207,6 +211,7 @@ async function subscribeToPush(){
     }, { onConflict: 'user_id,endpoint' });
     if(error) throw error;
     showToast('התראות פוש הופעלו');
+    refreshAttendanceReminderSchedule();
   }catch(e){
     console.error(e);
     showToast('שגיאה בהפעלת ההתראות');
@@ -265,6 +270,111 @@ async function cancelBreakReminder(reminderId){
     await supabaseClient.from('break_reminders').delete().eq('id', reminderId).eq('sent', false);
   }catch(e){
     console.error('cancelBreakReminder failed', e);
+  }
+}
+
+const ATTENDANCE_REMINDER_MESSAGES = {
+  checkIn: 'לא שכחת להחתים כניסה?',
+  checkOut: 'לא שכחת להחתים יציאה?',
+  checkOutRepeat: 'עדיין לא החתמת יציאה'
+};
+
+function parseClockTime(value, fallback){
+  const match = String(value || '').match(/^(\d{2}):(\d{2})$/);
+  if(!match) return fallback;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if(hour > 23 || minute > 59) return fallback;
+  return { hour, minute };
+}
+
+async function hasPushSubscription(){
+  return !!(await getCurrentPushSubscription());
+}
+
+async function cancelAttendanceReminderMessages(messages){
+  if(!currentUserId || !messages.length) return;
+  try{
+    await supabaseClient
+      .from('break_reminders')
+      .delete()
+      .eq('user_id', currentUserId)
+      .eq('sent', false)
+      .in('message', messages);
+  }catch(e){
+    console.error('cancelAttendanceReminderMessages failed', e);
+  }
+}
+
+async function scheduleCheckInReminders(){
+  if(!currentUserId) return;
+  await cancelAttendanceReminderMessages([ATTENDANCE_REMINDER_MESSAGES.checkIn]);
+  if(!settings.attendanceRemindersEnabled || !(await hasPushSubscription())) return;
+
+  const clock = parseClockTime(settings.checkInReminderTime, { hour:8, minute:0 });
+  const rows = [];
+  const now = new Date();
+
+  // Keep a rolling month of reminders. Every normal app launch refreshes it.
+  for(let offset = 0; offset < 31; offset++){
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset, clock.hour, clock.minute, 0, 0);
+    const weekday = day.getDay();
+    if(weekday === 5 || weekday === 6 || day.getTime() <= Date.now()) continue; // א׳–ה׳ only
+    rows.push({
+      user_id: currentUserId,
+      fire_at: day.toISOString(),
+      message: ATTENDANCE_REMINDER_MESSAGES.checkIn
+    });
+  }
+  if(rows.length){
+    const { error } = await supabaseClient.from('break_reminders').insert(rows);
+    if(error) throw error;
+  }
+}
+
+async function scheduleCheckOutReminders(){
+  if(!currentUserId) return;
+  await cancelAttendanceReminderMessages([
+    ATTENDANCE_REMINDER_MESSAGES.checkOut,
+    ATTENDANCE_REMINDER_MESSAGES.checkOutRepeat
+  ]);
+  if(!settings.attendanceRemindersEnabled || !activeSession || !(await hasPushSubscription())) return;
+
+  const clock = parseClockTime(settings.checkOutReminderTime, { hour:16, minute:0 });
+  const [year, month, day] = activeSession.date.split('-').map(Number);
+  const first = new Date(year, month - 1, day, clock.hour, clock.minute, 0, 0);
+  const repeatMinutes = Math.max(0, Number(settings.checkOutRepeatMinutes) || 0);
+  const rows = [];
+
+  if(first.getTime() > Date.now()){
+    rows.push({
+      user_id: currentUserId,
+      fire_at: first.toISOString(),
+      message: ATTENDANCE_REMINDER_MESSAGES.checkOut
+    });
+  }
+  if(repeatMinutes > 0){
+    const second = new Date(first.getTime() + repeatMinutes * 60000);
+    if(second.getTime() > Date.now()){
+      rows.push({
+        user_id: currentUserId,
+        fire_at: second.toISOString(),
+        message: ATTENDANCE_REMINDER_MESSAGES.checkOutRepeat
+      });
+    }
+  }
+  if(rows.length){
+    const { error } = await supabaseClient.from('break_reminders').insert(rows);
+    if(error) throw error;
+  }
+}
+
+async function refreshAttendanceReminderSchedule(){
+  try{
+    await scheduleCheckInReminders();
+    if(activeSession) await scheduleCheckOutReminders();
+  }catch(e){
+    console.error('refreshAttendanceReminderSchedule failed', e);
   }
 }
 
@@ -601,6 +711,8 @@ async function clockIn(){
     }
     activeSession = { date: todayStr(), checkIn: nowTimeStr(), breaks: [] };
     await saveActiveSession();
+    await cancelAttendanceReminderMessages([ATTENDANCE_REMINDER_MESSAGES.checkIn]);
+    await scheduleCheckOutReminders();
     render();
     showToast('המשמרת התחילה — בהצלחה!');
   });
@@ -640,6 +752,10 @@ async function clockOut(){
   return runShiftAction(async () => {
     if(!activeSession){ render(); showToast('אין משמרת פעילה'); return; }
     const checkOut = nowTimeStr();
+    await cancelAttendanceReminderMessages([
+      ATTENDANCE_REMINDER_MESSAGES.checkOut,
+      ATTENDANCE_REMINDER_MESSAGES.checkOutRepeat
+    ]);
     if(isOnBreak()){
       const lastBreak = activeSession.breaks[activeSession.breaks.length-1];
       lastBreak.end = checkOut;
@@ -1372,6 +1488,10 @@ function openSettings(){
   $('#setMonthlyCap').value = settings.monthlyCap;
   $('#setFreeBreak').value = settings.freeBreakMinutes;
   $('#setCapWarnHours').value = settings.capWarnHours;
+  $('#setAttendanceReminders').value = settings.attendanceRemindersEnabled ? 'on' : 'off';
+  $('#setCheckInReminderTime').value = settings.checkInReminderTime || '08:00';
+  $('#setCheckOutReminderTime').value = settings.checkOutReminderTime || '16:00';
+  $('#setCheckOutRepeatMinutes').value = settings.checkOutRepeatMinutes ?? 30;
   updateThemeButtonsUI();
   renderDeductionRows();
   renderAdditionRows();
@@ -1461,6 +1581,10 @@ $('#saveSettings').addEventListener('click', async () => {
   settings.monthlyCap = Number($('#setMonthlyCap').value) || 0;
   settings.freeBreakMinutes = Number($('#setFreeBreak').value) || 0;
   settings.capWarnHours = Number($('#setCapWarnHours').value) || 0;
+  settings.attendanceRemindersEnabled = $('#setAttendanceReminders').value === 'on';
+  settings.checkInReminderTime = $('#setCheckInReminderTime').value || '08:00';
+  settings.checkOutReminderTime = $('#setCheckOutReminderTime').value || '16:00';
+  settings.checkOutRepeatMinutes = Math.max(0, Number($('#setCheckOutRepeatMinutes').value) || 0);
   document.querySelectorAll('#deductionsSettings .deduction-row').forEach((row,i) => {
     settings.deductions[i].name = row.querySelector('[data-field="name"]').value || 'רכיב';
     settings.deductions[i].percent = Number(row.querySelector('[data-field="percent"]').value) || 0;
@@ -1470,6 +1594,7 @@ $('#saveSettings').addEventListener('click', async () => {
     settings.additions[i].amount = Number(row.querySelector('[data-field="amount"]').value) || 0;
   });
   await saveSettingsToStorage();
+  await refreshAttendanceReminderSchedule();
   closeSettings();
   render();
 });
@@ -1603,6 +1728,7 @@ async function startApp(session){
     try{
       await loadInitialData(userId);
       render();
+      refreshAttendanceReminderSchedule();
     }catch(e){
       console.error('background refresh failed', e);
     }
@@ -1613,6 +1739,7 @@ async function startApp(session){
   try{
     await loadInitialData(userId);
     showReadyApp();
+    refreshAttendanceReminderSchedule();
   }catch(e){
     console.error('startApp error', e);
     settings = normalizeSettings(settings);
