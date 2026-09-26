@@ -163,7 +163,12 @@
     padding:calc(14px + env(safe-area-inset-top, 0px)) max(18px, env(safe-area-inset-right, 0px)) 12px max(18px, env(safe-area-inset-left, 0px));
     border-bottom:1px solid var(--border);
     position:relative;z-index:10;
-    background:var(--bg);
+    /* Keep the header completely solid: no translucent/blurred layer in either theme. */
+    background-color:var(--bg);
+    background-image:none;
+    -webkit-backdrop-filter:none;
+    backdrop-filter:none;
+    box-shadow:none;
     isolation:isolate;
     transform:translateZ(0);
     -webkit-backface-visibility:hidden;backface-visibility:hidden;
