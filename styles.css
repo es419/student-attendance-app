@@ -857,3 +857,42 @@ main{
   touch-action:pan-y;
   padding-bottom:calc(16px + env(safe-area-inset-bottom, 0px));
 }
+
+
+/* Sick-day markers and a compact monthly payslip comparison */
+#entryForm select{background:var(--surface-2);border:1px solid var(--border);color:var(--ink);border-radius:8px;padding:8px 9px;font-size:13.5px;width:100%;min-width:0;}
+.entry-work-fields{grid-column:1 / -1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px 10px;}
+.entry-work-fields[hidden],.sick-entry-note[hidden]{display:none!important;}
+.sick-entry-note{grid-column:1 / -1;margin:0;padding:9px 10px;border-radius:9px;color:var(--accent-text);background:color-mix(in srgb,var(--brass) 12%,transparent);border:1px solid color-mix(in srgb,var(--brass) 35%,transparent);font-size:11.5px;line-height:1.45;}
+.sick-note{margin:0 0 12px;padding:8px 10px;border-radius:9px;color:var(--accent-text);background:color-mix(in srgb,var(--brass) 12%,transparent);border:1px solid color-mix(in srgb,var(--brass) 35%,transparent);font-size:11.5px;}
+.chip.sick,.cal-cell.sick-day .cal-day-num{color:#a76a9f;}
+.chip.sick{background:rgba(167,106,159,.16);}
+.cal-sick-mark{position:absolute;top:3px;left:4px;font-size:8px;font-weight:700;color:#a76a9f;}
+.payslip-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px;}
+.payslip-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.payslip-head h2{margin:0;}
+.payslip-head p{margin:3px 0 0;color:var(--ink-faint);font-size:11px;}
+.payslip-inputs{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-bottom:14px;}
+.payslip-inputs label{display:flex;flex-direction:column;gap:5px;min-width:0;color:var(--ink-faint);font-size:11.5px;}
+.payslip-inputs input{width:100%;min-width:0;background:var(--surface-2);border:1px solid var(--border);color:var(--ink);border-radius:8px;padding:9px;font-size:14px;}
+.payslip-table{border-top:1px solid var(--border);}
+.payslip-row{display:grid;grid-template-columns:minmax(42px,.75fr) repeat(3,minmax(0,1fr));gap:5px;align-items:center;padding:9px 0;border-bottom:1px solid var(--border);font-size:10.5px;text-align:center;}
+.payslip-row>span:first-child,.payslip-row>strong:first-child{text-align:right;}
+.payslip-row-head{color:var(--ink-faint);font-size:10px;}
+.comparison-diff{font-size:9.5px;font-weight:700;line-height:1.25;}
+.comparison-diff.positive{color:var(--teal);}
+.comparison-diff.negative{color:var(--rust);}
+.comparison-diff.equal{color:var(--ink-dim);}
+.comparison-missing{color:var(--ink-faint);font-size:9.5px;}
+.payslip-actions{display:flex;gap:8px;margin-top:12px;}
+.payslip-actions button{flex:1;background:linear-gradient(155deg,var(--brass-bright),var(--brass));color:#17130a;border:0;border-radius:8px;padding:9px;font-weight:700;font-size:12px;}
+.payslip-actions .payslip-clear{background:var(--surface-2);border:1px solid var(--border);color:var(--ink-dim);}
+
+/* On the shifts tab, scroll only the attendance rows; keep controls and entry form visible. */
+#mainContent.shifts-view{display:flex;flex-direction:column;overflow:hidden;overscroll-behavior:none;}
+#mainContent.shifts-view>.shift-widget,#mainContent.shifts-view>.tab-bar{flex:0 0 auto;}
+#mainContent.shifts-view>.tab-panel[data-panel="shifts"]{display:flex;flex:1 1 0;flex-direction:column;min-height:0;overflow:hidden;}
+#mainContent.shifts-view .month-select,#mainContent.shifts-view .add-entry{flex:0 0 auto;}
+#mainContent.shifts-view .entries-list{display:flex;flex:1 1 0;flex-direction:column;min-height:0;overflow:hidden;margin-bottom:0;}
+#mainContent.shifts-view .entries-list .list-header{flex:0 0 auto;}
+#mainContent.shifts-view #entriesContainer{flex:1 1 0;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;padding:0 2px 8px;}
