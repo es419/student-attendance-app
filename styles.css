@@ -939,3 +939,215 @@ main::-webkit-scrollbar{display:none;width:0;height:0;}
 .payslip-actions{display:flex;gap:8px;margin-top:12px;}
 .payslip-actions button{flex:1;background:linear-gradient(155deg,var(--brass-bright),var(--brass));color:#17130a;border:0;border-radius:8px;padding:9px;font-weight:700;font-size:12px;}
 .payslip-actions .payslip-clear{background:var(--surface-2);border:1px solid var(--border);color:var(--ink-dim);}
+
+
+/* ---------- shifts tab: fixed header, only the list scrolls ---------- */
+main.shifts-active{
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px));
+}
+main.shifts-active > .tab-bar{flex:0 0 auto;}
+main.shifts-active > .tab-panel[data-panel="shifts"]{
+  flex:1 1 auto;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+}
+main.shifts-active .month-select,
+main.shifts-active .add-entry-trigger{flex:0 0 auto;}
+main.shifts-active .month-select{margin:0 0 12px;}
+main.shifts-active .add-entry-trigger{margin:0 0 12px;}
+main.shifts-active .entries-list{
+  flex:1 1 auto;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+  margin-bottom:0;
+}
+main.shifts-active .list-header{flex:0 0 auto;}
+main.shifts-active .entries-list #entriesContainer{
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+  touch-action:pan-y;
+  scrollbar-width:none;
+  /* room so the last row is not glued to the screen edge */
+  padding-bottom:4px;
+}
+main.shifts-active .entries-list #entriesContainer::-webkit-scrollbar{display:none;width:0;height:0;}
+
+
+/* ---------- entry editor: consistent, iOS-safe form controls ---------- */
+.entry-editor #entryForm{
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:16px 12px;
+}
+/* date + day-type each get a full row so nothing has to squeeze */
+.entry-editor #entryForm > label:first-child,
+.entry-editor #entryForm > label:nth-child(2){grid-column:1 / -1;}
+
+/* every label is a one-column grid: the control inside can never be wider than its track */
+.entry-editor #entryForm label{
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:7px;
+  min-width:0;
+  font-size:12.5px;
+  font-weight:600;
+  color:var(--ink-dim);
+}
+
+.entry-editor #entryForm input,
+.entry-editor #entryForm select{
+  -webkit-appearance:none;
+  appearance:none;
+  display:block;
+  box-sizing:border-box;
+  width:100%;
+  min-width:0;
+  max-width:100%;
+  inline-size:100%;
+  height:50px;
+  min-height:50px;
+  margin:0;
+  padding:0 14px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background-color:var(--surface-2);
+  color:var(--ink);
+  font-size:16px!important;
+  font-weight:500;
+  line-height:normal;
+  text-align:right;
+  outline:none;
+  transition:border-color .15s ease, box-shadow .15s ease;
+}
+.entry-editor #entryForm input:focus,
+.entry-editor #entryForm select:focus{
+  border-color:var(--brass);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--brass) 25%,transparent);
+  outline:none;
+}
+
+/* Safari renders date/time values in an inner element that needs its own reset */
+.entry-editor #entryForm input[type="date"],
+.entry-editor #entryForm input[type="time"]{
+  overflow:hidden;
+  text-align:right;
+}
+.entry-editor #entryForm input::-webkit-date-and-time-value{
+  min-height:1.5em;
+  margin:0;
+  padding:0;
+  text-align:right;
+}
+.entry-editor #entryForm input::-webkit-datetime-edit{padding:0;}
+.entry-editor #entryForm input::-webkit-calendar-picker-indicator{
+  margin:0;padding:0;opacity:.6;
+}
+/* hide number spinners (desktop) so the field looks like the others */
+.entry-editor #entryForm input[type="number"]{-moz-appearance:textfield;}
+.entry-editor #entryForm input[type="number"]::-webkit-outer-spin-button,
+.entry-editor #entryForm input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+
+/* select: custom chevron on the left (RTL), text stays on the right */
+.entry-editor #entryForm select{
+  padding-inline:14px 40px;
+  padding-left:40px;
+  padding-right:14px;
+  text-align-last:right;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238b95a3' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:left 14px center;
+  background-size:14px 14px;
+}
+
+/* in/out pair + break row */
+.entry-editor .entry-work-fields{
+  grid-column:1 / -1;
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:16px 12px;
+  min-width:0;
+}
+
+.entry-editor #entryForm > button[type="submit"]{
+  height:52px;
+  min-height:52px;
+  margin-top:4px;
+  border-radius:12px;
+  font-size:16px;
+}
+
+
+/* ---------- today tab: one fixed screen, native-app feel ---------- */
+main.today-active{
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px));
+}
+main.today-active > .tab-bar{flex:0 0 auto;margin-bottom:12px;}
+main.today-active > .tab-panel[data-panel="today"]{
+  flex:1 1 auto;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+}
+main.today-active .shift-widget{
+  flex:0 0 auto;
+  margin-bottom:12px;
+  padding:16px;
+  gap:10px;
+}
+main.today-active .shift-widget.idle .shift-btn{padding:16px;}
+/* the summary area fills the remaining height; it only scrolls internally
+   on very small screens or when the payslip comparison is expanded */
+.today-body{
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+  touch-action:pan-y;
+  scrollbar-width:none;
+}
+.today-body::-webkit-scrollbar{display:none;width:0;height:0;}
+main.today-active .ledger-card{padding:14px 16px 12px;margin-bottom:12px;}
+main.today-active .punch-strip{margin-bottom:12px;}
+main.today-active .ledger-grid{margin-bottom:10px;}
+main.today-active .pay-row{padding:3px 0;font-size:12.5px;}
+main.today-active .pay-row.net{padding-top:8px;margin-top:4px;font-size:15px;}
+main.today-active .cap-warning,
+main.today-active .break-note,
+main.today-active .sick-note{margin-bottom:10px;}
+
+/* payslip comparison: collapsed by default so the screen stays clean */
+.payslip-card{padding:0;margin-bottom:0;overflow:hidden;}
+.payslip-card > summary{
+  list-style:none;
+  cursor:pointer;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 16px;margin:0;
+}
+.payslip-card > summary::-webkit-details-marker{display:none;}
+.payslip-card > summary::after{
+  content:"";
+  width:8px;height:8px;
+  border-right:2px solid var(--ink-faint);
+  border-bottom:2px solid var(--ink-faint);
+  transform:rotate(45deg) translate(-2px,-2px);
+  transition:transform .2s ease;
+  margin-inline-start:12px;
+  flex:0 0 auto;
+}
+.payslip-card[open] > summary::after{transform:rotate(-135deg) translate(-2px,-2px);}
+.payslip-card[open] > summary{padding-bottom:6px;}
+.payslip-card > :not(summary){margin-inline:16px;}
+.payslip-card > .payslip-actions{margin-bottom:16px;}
+.payslip-card > .payslip-inputs{margin-top:8px;}
+.payslip-card > summary h2{margin:0;}
