@@ -888,13 +888,9 @@ main{
 .payslip-actions button{flex:1;background:linear-gradient(155deg,var(--brass-bright),var(--brass));color:#17130a;border:0;border-radius:8px;padding:9px;font-weight:700;font-size:12px;}
 .payslip-actions .payslip-clear{background:var(--surface-2);border:1px solid var(--border);color:var(--ink-dim);}
 
-/* Shifts: keep navigation and month controls fixed; give the list the available height. */
-#mainContent.shifts-view{display:flex;flex-direction:column;overflow:hidden;overscroll-behavior:none;padding-bottom:calc(8px + env(safe-area-inset-bottom,0px));}
-#mainContent.shifts-view>.tab-bar{flex:0 0 auto;margin-bottom:10px;}
-#mainContent.shifts-view>.tab-panel[data-panel="shifts"]{display:flex;flex:1 1 0;flex-direction:column;min-height:0;overflow:hidden;gap:8px;}
+/* Keep one consistent page scroller on both tabs; the shifts list flows with the page. */
 #mainContent.shifts-view>.tab-panel[hidden]{display:none!important;}
-#mainContent.shifts-view .month-select{flex:0 0 auto;margin:0;padding:2px 0 6px;}
-#mainContent.shifts-view .add-entry-trigger{flex:0 0 auto;}
+.add-entry-trigger{flex:0 0 auto;}
 #mainContent.shifts-view .entries-list{display:flex;flex:1 1 0;flex-direction:column;min-height:0;overflow:hidden;margin:0;}
 #mainContent.shifts-view .entries-list .list-header{flex:0 0 auto;}
 #mainContent.shifts-view #entriesContainer{flex:1 1 0;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;padding:0 2px 8px;scrollbar-width:none;}
