@@ -908,7 +908,7 @@ main{
   -webkit-overflow-scrolling:touch;
   touch-action:pan-y;
   scrollbar-width:none;
-  padding-bottom:calc(16px + env(safe-area-inset-bottom, 0px));
+  padding-bottom:0;
 }
 main::-webkit-scrollbar{display:none;width:0;height:0;}
 .tab-panel[hidden]{display:none!important;}
