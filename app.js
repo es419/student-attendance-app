@@ -1145,14 +1145,13 @@ function render(){
   const dates = Object.keys(monthData.days).sort().reverse();
 
   main.innerHTML = `
-    ${buildShiftWidget()}
-
     <div class="tab-bar">
       <button type="button" data-tab="today" class="tab-btn ${activeTab==='today'?'active':''}">היום</button>
       <button type="button" data-tab="shifts" class="tab-btn ${activeTab==='shifts'?'active':''}">משמרות</button>
     </div>
 
     <div class="tab-panel" data-panel="today" ${activeTab!=='today' ? 'hidden' : ''}>
+    ${buildShiftWidget()}
     <section class="ledger-card">
       <div class="cap-label">
         <span>0</span>
@@ -1199,8 +1198,11 @@ function render(){
       <button id="nextMonth" aria-label="חודש הבא">›</button>
     </section>
 
-    <section class="add-entry">
-      <h2>הוספת / עדכון יום עבודה</h2>
+    <button class="add-entry-trigger" type="button" id="addEntryBtn">＋ הוספת יום</button>
+
+    <div class="entry-editor-overlay" id="entryEditorOverlay" hidden>
+    <section class="add-entry entry-editor" role="dialog" aria-modal="true" aria-labelledby="entryEditorTitle">
+      <div class="entry-editor-head"><h2 id="entryEditorTitle">הוספת / עדכון יום עבודה</h2><button type="button" id="entryEditorClose" aria-label="סגירה">✕</button></div>
       <form id="entryForm">
         <label>תאריך <input type="date" id="entryDate" value="${todayStr()}"></label>
         <label>סוג יום
@@ -1218,6 +1220,7 @@ function render(){
         <button type="submit">שמור יום</button>
       </form>
     </section>
+    </div>
 
     <section class="entries-list">
       <div class="list-header">
@@ -1246,6 +1249,9 @@ function render(){
   $('#nextMonth').addEventListener('click', () => changeMonth(1));
   $('#entryForm').addEventListener('submit', onAddEntry);
   $('#entryType').addEventListener('change', updateEntryTypeUI);
+  $('#addEntryBtn').addEventListener('click', () => openEntryEditor());
+  $('#entryEditorClose').addEventListener('click', closeEntryEditor);
+  $('#entryEditorOverlay').addEventListener('click', ev => { if(ev.target.id === 'entryEditorOverlay') closeEntryEditor(); });
   $('#savePayslipBtn').addEventListener('click', savePayslipComparison);
   $('#clearPayslipBtn').addEventListener('click', clearPayslipComparison);
   document.querySelectorAll('[data-view]').forEach(btn => {
@@ -1347,6 +1353,26 @@ function updateEntryTypeUI(){
   $('#sickDayNote').hidden = !isSick;
 }
 
+function closeEntryEditor(){
+  const overlay = document.getElementById('entryEditorOverlay');
+  if(overlay) overlay.hidden = true;
+}
+
+function openEntryEditor(date = null){
+  if(date){
+    fillFormForDate(date);
+  }else{
+    $('#entryDate').value = todayStr();
+    $('#entryType').value = 'work';
+    $('#entryIn').value = '';
+    $('#entryOut').value = '';
+    $('#entryBreak').value = 0;
+    updateEntryTypeUI();
+  }
+  const overlay = document.getElementById('entryEditorOverlay');
+  if(overlay) overlay.hidden = false;
+}
+
 function fillFormForDate(date){
   const e = monthData.days[date];
   $('#entryDate').value = date;
@@ -1361,11 +1387,11 @@ function wireEntryInteractions(){
   document.querySelectorAll('.entry-row').forEach(row => {
     row.addEventListener('click', (ev) => {
       if(ev.target.closest('.entry-del')) return;
-      fillFormForDate(row.dataset.date);
+      openEntryEditor(row.dataset.date);
     });
   });
   document.querySelectorAll('.cal-cell[data-date]').forEach(cell => {
-    cell.addEventListener('click', () => fillFormForDate(cell.dataset.date));
+    cell.addEventListener('click', () => openEntryEditor(cell.dataset.date));
   });
   document.querySelectorAll('[data-del]').forEach(btn => {
     btn.addEventListener('click', async (ev) => {
