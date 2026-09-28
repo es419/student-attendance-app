@@ -23,6 +23,7 @@ const HE_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','�
 const DEFAULT_SETTINGS = {
   hourlyRate: 39.58,
   regularHours: 8,
+  sickDayHours: 0,
   ot125Hours: 2,
   monthlyCap: 120,
   freeBreakMinutes: 40,
@@ -44,7 +45,8 @@ const DEFAULT_SETTINGS = {
 
 let settings = null;
 let currentDate = new Date();
-let monthData = { days: {} }; // { "YYYY-MM-DD": { in, out, brk } }
+let monthData = { days: {} }; // { "YYYY-MM-DD": { type, in, out, brk } }
+let payslipActual = { gross: null, net: null };
 let viewMode = 'list'; // 'calendar' | 'list'
 let activeTab = 'today'; // 'today' | 'shifts'
 let activeSession = null; // { date, checkIn, breaks:[{start,end|null}] } — persisted while a shift is running
@@ -65,6 +67,7 @@ function readInitialCache(userId){
     if(!cached || typeof cached !== 'object') return false;
     settings = normalizeSettings(cached.settings);
     monthData = cached.monthData || { days:{} };
+    payslipActual = normalizePayslip(cached.payslipActual);
     activeSession = cached.activeSession || null;
     applyTheme();
     return true;
@@ -77,7 +80,7 @@ function writeInitialCache(userId){
   if(!userId) return;
   try{
     localStorage.setItem(initialCacheKey(userId), JSON.stringify({
-      settings, monthData, activeSession, cachedAt: Date.now()
+      settings, monthData, payslipActual, activeSession, cachedAt: Date.now()
     }));
   }catch(e){ /* cache is best-effort */ }
 }
@@ -395,9 +398,15 @@ function deepClone(obj){
 
 function normalizeSettings(saved = null){
   const merged = { ...deepClone(DEFAULT_SETTINGS), ...(saved || {}) };
+  if(!Number.isFinite(Number(merged.sickDayHours)) || Number(merged.sickDayHours) < 0) merged.sickDayHours = 0;
   if(!Array.isArray(merged.deductions)) merged.deductions = deepClone(DEFAULT_SETTINGS.deductions);
   if(!Array.isArray(merged.additions)) merged.additions = deepClone(DEFAULT_SETTINGS.additions);
   return merged;
+}
+
+function normalizePayslip(value = null){
+  const amount = raw => raw === null || raw === undefined || raw === '' || !Number.isFinite(Number(raw)) || Number(raw) < 0 ? null : Number(raw);
+  return { gross: amount(value?.gross), net: amount(value?.net) };
 }
 
 // ---- Supabase key-value storage ----
@@ -597,9 +606,10 @@ async function saveSettingsToStorage(){
 }
 
 async function loadMonth(d){
-  const key = `attendance:${monthKey(d)}`;
-  const saved = await kvGet(key);
+  const mk = monthKey(d);
+  const [saved, savedPayslip] = await Promise.all([kvGet(`attendance:${mk}`), kvGet(`payslip:${mk}`)]);
   monthData = saved || { days:{} };
+  payslipActual = normalizePayslip(savedPayslip);
 }
 
 async function saveMonth(d){
@@ -615,11 +625,12 @@ async function loadInitialData(userId = currentUserId){
   if(!userId) throw new Error('No authenticated user');
 
   const monthDataKey = `attendance:${monthKey(currentDate)}`;
+  const payslipKey = `payslip:${monthKey(currentDate)}`;
   const { data: rows, error } = await supabaseClient
     .from('kv_store')
     .select('key, value')
     .eq('user_id', userId)
-    .in('key', ['settings', monthDataKey, 'activeSession']);
+    .in('key', ['settings', monthDataKey, payslipKey, 'activeSession']);
 
   if(error) throw error;
 
@@ -627,6 +638,7 @@ async function loadInitialData(userId = currentUserId){
   settings = normalizeSettings(byKey.settings);
 
   monthData = byKey[monthDataKey] || { days:{} };
+  payslipActual = normalizePayslip(byKey[payslipKey]);
   activeSession = byKey.activeSession || null;
   applyTheme();
   writeInitialCache(userId);
@@ -831,6 +843,10 @@ function timeToMinutes(t){
 }
 
 function dayHours(entry){
+  if(entry?.type === 'sick'){
+    const total = Math.max(0, Number(settings.sickDayHours) || 0);
+    return { total, regular:total, ot125:0, ot150:0, excessBreakMin:0, type:'sick' };
+  }
   let rawSpan = timeToMinutes(entry.out) - timeToMinutes(entry.in);
   if(rawSpan < 0) rawSpan = 0;
   const brk = Number(entry.brk)||0;
@@ -843,18 +859,20 @@ function dayHours(entry){
   const ot125 = Math.min(rest, settings.ot125Hours);
   rest = Math.max(0, rest - settings.ot125Hours);
   const ot150 = rest;
-  return { total, regular, ot125, ot150, excessBreakMin };
+  return { total, regular, ot125, ot150, excessBreakMin, type:'work' };
 }
 
 function computeMonth(monthDataArg){
   const md = monthDataArg || monthData;
   const dates = Object.keys(md.days).sort();
   let cumRaw = 0;
-  let paidRegular=0, paidOt125=0, paidOt150=0, unpaid=0, rawTotal=0, excessBreakMinTotal=0;
+  let paidRegular=0, paidOt125=0, paidOt150=0, unpaid=0, rawTotal=0, excessBreakMinTotal=0, sickHours=0, sickDays=0;
   const perDay = {};
 
   for(const date of dates){
-    const h = dayHours(md.days[date]);
+    const dayEntry = md.days[date];
+    const h = dayHours(dayEntry);
+    if(dayEntry?.type === 'sick') { sickHours += h.total; sickDays++; }
     perDay[date] = h;
     rawTotal += h.total;
     excessBreakMinTotal += h.excessBreakMin;
@@ -886,7 +904,7 @@ function computeMonth(monthDataArg){
   const totalDeductions = deductionAmounts.reduce((s,d)=>s+d.amount,0);
   const net = gross - totalDeductions;
 
-  return { perDay, paidRegular, paidOt125, paidOt150, unpaid, rawTotal, hoursGross, gross, deductionAmounts, totalDeductions, additionAmounts, totalAdditions, net, excessBreakMinTotal, capExceeded: rawTotal > settings.monthlyCap };
+  return { perDay, paidRegular, paidOt125, paidOt150, unpaid, rawTotal, hoursGross, gross, deductionAmounts, totalDeductions, additionAmounts, totalAdditions, net, excessBreakMinTotal, sickHours, sickDays, capExceeded: rawTotal > settings.monthlyCap };
 }
 
 async function getAllMonthsData(){
@@ -914,6 +932,29 @@ async function getAllMonthsData(){
 // ---- rendering ----
 function fmtHours(h){ return h.toLocaleString('he-IL',{minimumFractionDigits:1,maximumFractionDigits:1}); }
 function fmtMoney(n){ return '₪' + n.toLocaleString('he-IL',{minimumFractionDigits:0,maximumFractionDigits:0}); }
+function fmtMoneyDiff(n){ return `${n > 0 ? '+' : n < 0 ? '−' : ''}${fmtMoney(Math.abs(n))}`; }
+function payslipDiff(actual, estimated){
+  if(actual === null) return '<span class="comparison-missing">לא הוזן</span>';
+  const delta = actual - estimated;
+  const label = delta === 0 ? 'תואם' : `${fmtMoneyDiff(delta)} ${delta > 0 ? 'מעל' : 'מתחת'} לאומדן`;
+  return `<span class="comparison-diff ${delta > 0 ? 'positive' : delta < 0 ? 'negative' : 'equal'}">${label}</span>`;
+}
+function buildPayslipCard(calc){
+  const actual = normalizePayslip(payslipActual);
+  return `<section class="payslip-card">
+    <div class="payslip-head"><div><h2>השוואה לתלוש</h2><p>${HE_MONTHS[currentDate.getMonth()]} ${currentDate.getFullYear()}</p></div></div>
+    <div class="payslip-inputs">
+      <label>ברוטו בתלוש (₪)<input id="actualPayslipGross" type="number" min="0" step="0.01" inputmode="decimal" value="${actual.gross ?? ''}" placeholder="לא הוזן"></label>
+      <label>נטו בתלוש (₪)<input id="actualPayslipNet" type="number" min="0" step="0.01" inputmode="decimal" value="${actual.net ?? ''}" placeholder="לא הוזן"></label>
+    </div>
+    <div class="payslip-table" aria-label="פער בין האומדן לתלוש">
+      <div class="payslip-row payslip-row-head"><span>רכיב</span><span>אומדן</span><span>תלוש</span><span>פער</span></div>
+      <div class="payslip-row"><strong>ברוטו</strong><span>${fmtMoney(calc.gross)}</span><span>${actual.gross === null ? '—' : fmtMoney(actual.gross)}</span>${payslipDiff(actual.gross,calc.gross)}</div>
+      <div class="payslip-row"><strong>נטו</strong><span>${fmtMoney(calc.net)}</span><span>${actual.net === null ? '—' : fmtMoney(actual.net)}</span>${payslipDiff(actual.net,calc.net)}</div>
+    </div>
+    <div class="payslip-actions"><button type="button" id="savePayslipBtn">שמור השוואה</button><button type="button" id="clearPayslipBtn" class="payslip-clear">נקה</button></div>
+  </section>`;
+}
 
 async function exportMonthToExcel(calc){
   const dates = Object.keys(monthData.days).sort();
@@ -929,20 +970,21 @@ async function exportMonthToExcel(calc){
     return;
   }
 
-  const shiftsHeader = ['תאריך','כניסה','יציאה','הפסקה (דק\')','חריגת הפסקה (דק\')','שעות רגילות','שעות 125%','שעות 150%','סה"כ שעות'];
+  const shiftsHeader = ['תאריך','כניסה','יציאה','הפסקה (דק\')','חריגת הפסקה (דק\')','שעות רגילות','שעות 125%','שעות 150%','סה"כ שעות','סוג יום'];
   const shiftsRows = dates.map(date => {
     const e = monthData.days[date];
     const h = calc.perDay[date];
     return [
       date,
-      e.in,
-      e.out,
-      e.brk,
+      e.in || '',
+      e.out || '',
+      e.brk || 0,
       Math.round(h.excessBreakMin),
       Number(h.regular.toFixed(2)),
       Number(h.ot125.toFixed(2)),
       Number(h.ot150.toFixed(2)),
-      Number(h.total.toFixed(2))
+      Number(h.total.toFixed(2)),
+      e.type === 'sick' ? 'מחלה' : 'עבודה'
     ];
   });
   const totalsRow = [
@@ -950,7 +992,7 @@ async function exportMonthToExcel(calc){
     Number(calc.paidRegular.toFixed(2)),
     Number(calc.paidOt125.toFixed(2)),
     Number(calc.paidOt150.toFixed(2)),
-    Number(calc.rawTotal.toFixed(2))
+    Number(calc.rawTotal.toFixed(2)), ''
   ];
 
   const shiftsSheet = XLSX.utils.aoa_to_sheet([shiftsHeader, ...shiftsRows, [], totalsRow]);
@@ -961,13 +1003,15 @@ async function exportMonthToExcel(calc){
     ['סיכום שכר', `${HE_MONTHS[currentDate.getMonth()]} ${currentDate.getFullYear()}`],
     [],
     ['שכר שעתי', settings.hourlyRate],
+    ['ימי מחלה', calc.sickDays],
+    ['שעות מחלה (ששולמו)', Number(calc.sickHours.toFixed(2))],
     ['שעות רגילות (ששולמו)', Number(calc.paidRegular.toFixed(2))],
     ['שעות 125% (ששולמו)', Number(calc.paidOt125.toFixed(2))],
     ['שעות 150% (ששולמו)', Number(calc.paidOt150.toFixed(2))],
     ['סה"כ שעות בפועל', Number(calc.rawTotal.toFixed(2))],
     ['שעות שלא שולמו (חריגת תקרה)', Number(calc.unpaid.toFixed(2))],
     [],
-    ['שכר משעות עבודה', Number(calc.hoursGross.toFixed(2))],
+    ['שכר משעות עבודה ומחלה', Number(calc.hoursGross.toFixed(2))],
     ...calc.additionAmounts.filter(a=>a.amount>0).map(a => [`תוספת: ${a.name}`, Number(a.amount.toFixed(2))]),
     ['שכר ברוטו משוער', Number(calc.gross.toFixed(2))],
     ...calc.deductionAmounts.map(d => [`ניכוי: ${d.name} (${d.percent}%)`, -Number(d.amount.toFixed(2))]),
@@ -1010,7 +1054,7 @@ async function exportAllHistoryToExcel(){
   }
 
   // Sheet 1: one row per month with totals
-  const monthlyHeader = ['חודש','שעות רגילות','שעות 125%','שעות 150%','סה"כ שעות בפועל','שעות לא ששולמו','ברוטו','נטו'];
+  const monthlyHeader = ['חודש','ימי מחלה','שעות מחלה','שעות רגילות','שעות 125%','שעות 150%','סה"כ שעות בפועל','שעות לא ששולמו','ברוטו','נטו'];
   const monthlyRows = [];
   const shiftsHeader = ['תאריך','כניסה','יציאה','הפסקה (דק\')','חריגת הפסקה (דק\')','שעות רגילות','שעות 125%','שעות 150%','סה"כ שעות'];
 
@@ -1029,6 +1073,8 @@ async function exportAllHistoryToExcel(){
 
     monthlyRows.push([
       label,
+      calc.sickDays,
+      Number(calc.sickHours.toFixed(2)),
       Number(calc.paidRegular.toFixed(2)),
       Number(calc.paidOt125.toFixed(2)),
       Number(calc.paidOt150.toFixed(2)),
@@ -1046,13 +1092,13 @@ async function exportAllHistoryToExcel(){
       const e = md.days[date];
       const h = calc.perDay[date];
       return [
-        date, e.in, e.out, e.brk, Math.round(h.excessBreakMin),
-        Number(h.regular.toFixed(2)), Number(h.ot125.toFixed(2)), Number(h.ot150.toFixed(2)), Number(h.total.toFixed(2))
+        date, e.in || '', e.out || '', e.brk || 0, Math.round(h.excessBreakMin),
+        Number(h.regular.toFixed(2)), Number(h.ot125.toFixed(2)), Number(h.ot150.toFixed(2)), Number(h.total.toFixed(2)), e.type === 'sick' ? 'מחלה' : 'עבודה'
       ];
     });
     const totalsRow = [
       'סה"כ', '', '', '', Math.round(calc.excessBreakMinTotal),
-      Number(calc.paidRegular.toFixed(2)), Number(calc.paidOt125.toFixed(2)), Number(calc.paidOt150.toFixed(2)), Number(calc.rawTotal.toFixed(2))
+      Number(calc.paidRegular.toFixed(2)), Number(calc.paidOt125.toFixed(2)), Number(calc.paidOt150.toFixed(2)), Number(calc.rawTotal.toFixed(2)), ''
     ];
 
     const monthSheet = XLSX.utils.aoa_to_sheet([shiftsHeader, ...monthRows, [], totalsRow]);
@@ -1072,7 +1118,7 @@ async function exportAllHistoryToExcel(){
   }
 
   monthlyRows.push([]);
-  monthlyRows.push(['סה"כ הכל', '', '', '', '', '', Number(grandGross.toFixed(2)), Number(grandNet.toFixed(2))]);
+  monthlyRows.push(['סה"כ הכל', '', '', '', '', '', '', '', Number(grandGross.toFixed(2)), Number(grandNet.toFixed(2))]);
 
   const monthlySheet = XLSX.utils.aoa_to_sheet([monthlyHeader, ...monthlyRows]);
   monthlySheet['!cols'] = monthlyHeader.map(() => ({ wch: 16 }));
@@ -1091,6 +1137,7 @@ async function exportAllHistoryToExcel(){
 
 function render(){
   const main = $('#mainContent');
+  main.classList.toggle('shifts-view', activeTab === 'shifts');
   const calc = computeMonth();
   const capPct = Math.min(100, (calc.rawTotal / settings.monthlyCap) * 100);
   const overPct = calc.capExceeded ? 100 - (settings.monthlyCap/calc.rawTotal*100) : 0;
@@ -1128,9 +1175,10 @@ function render(){
 
       ${calc.capExceeded ? `<div class="cap-warning">חרגת מ-${settings.monthlyCap} שעות החודש — כ-${fmtHours(calc.unpaid)} שעות לא ישולמו לפי החוזה.</div>` : ''}
       ${calc.excessBreakMinTotal > 0 ? `<div class="break-note">☕ החודש נוכו ${Math.round(calc.excessBreakMinTotal)} דק׳ (${fmtHours(calc.excessBreakMinTotal/60)} ש׳) בגין חריגות הפסקה מעבר ל-${settings.freeBreakMinutes} הדק׳ הפטורות ליום.</div>` : ''}
+      ${calc.sickDays > 0 ? `<div class="sick-note">נכללו ${calc.sickDays} ימי מחלה (${fmtHours(calc.sickHours)} שעות), לפי התקן שהוגדר.</div>` : ''}
 
       <div class="pay-breakdown">
-        <div class="pay-row"><span>שכר משעות עבודה</span><span class="mono">${fmtMoney(calc.hoursGross)}</span></div>
+        <div class="pay-row"><span>שכר משעות עבודה ומחלה</span><span class="mono">${fmtMoney(calc.hoursGross)}</span></div>
         ${calc.additionAmounts.filter(a=>a.amount>0).length ? `<div class="additions-list">
           ${calc.additionAmounts.filter(a=>a.amount>0).map(a => `<div class="pay-row"><span>${escapeHtml(a.name)}</span><span class="mono addition">+${fmtMoney(a.amount)}</span></div>`).join('')}
         </div>` : ''}
@@ -1141,6 +1189,7 @@ function render(){
         <div class="pay-row net"><span>שכר נטו משוער</span><span class="mono">${fmtMoney(calc.net)}</span></div>
       </div>
     </section>
+    ${buildPayslipCard(calc)}
     </div>
 
     <div class="tab-panel" data-panel="shifts" ${activeTab!=='shifts' ? 'hidden' : ''}>
@@ -1154,9 +1203,18 @@ function render(){
       <h2>הוספת / עדכון יום עבודה</h2>
       <form id="entryForm">
         <label>תאריך <input type="date" id="entryDate" value="${todayStr()}"></label>
-        <label>הפסקה (דק') <input type="number" id="entryBreak" value="0" min="0"></label>
-        <label>שעת כניסה <input type="time" id="entryIn"></label>
-        <label>שעת יציאה <input type="time" id="entryOut"></label>
+        <label>סוג יום
+          <select id="entryType">
+            <option value="work">יום עבודה</option>
+            <option value="sick">מחלה</option>
+          </select>
+        </label>
+        <div class="entry-work-fields" id="entryWorkFields">
+          <label>הפסקה (דק') <input type="number" id="entryBreak" value="0" min="0"></label>
+          <label>שעת כניסה <input type="time" id="entryIn"></label>
+          <label>שעת יציאה <input type="time" id="entryOut"></label>
+        </div>
+        <p class="sick-entry-note" id="sickDayNote" hidden>${Number(settings.sickDayHours) > 0 ? `מחלה: ${fmtHours(settings.sickDayHours)} שעות בתעריף רגיל, בתשלום מהיום הראשון.` : 'כדי להזין יום מחלה, הגדירו תחילה את שעות התקן בהגדרות.'}</p>
         <button type="submit">שמור יום</button>
       </form>
     </section>
@@ -1187,6 +1245,9 @@ function render(){
   $('#prevMonth').addEventListener('click', () => changeMonth(-1));
   $('#nextMonth').addEventListener('click', () => changeMonth(1));
   $('#entryForm').addEventListener('submit', onAddEntry);
+  $('#entryType').addEventListener('change', updateEntryTypeUI);
+  $('#savePayslipBtn').addEventListener('click', savePayslipComparison);
+  $('#clearPayslipBtn').addEventListener('click', clearPayslipComparison);
   document.querySelectorAll('[data-view]').forEach(btn => {
     btn.addEventListener('click', () => {
       viewMode = btn.dataset.view;
@@ -1205,6 +1266,9 @@ function render(){
 function switchTab(tab){
   if(tab !== 'today' && tab !== 'shifts') return;
   activeTab = tab;
+  const main = $('#mainContent');
+  main.classList.toggle('shifts-view', tab === 'shifts');
+  main.scrollTop = 0;
   document.querySelectorAll('[data-tab]').forEach(btn => {
     const selected = btn.dataset.tab === tab;
     btn.classList.toggle('active', selected);
@@ -1277,19 +1341,20 @@ function attachLongPress(el, callback, duration=650){
   el.addEventListener('contextmenu', ev => ev.preventDefault());
 }
 
+function updateEntryTypeUI(){
+  const isSick = $('#entryType').value === 'sick';
+  $('#entryWorkFields').hidden = isSick;
+  $('#sickDayNote').hidden = !isSick;
+}
+
 function fillFormForDate(date){
   const e = monthData.days[date];
   $('#entryDate').value = date;
-  if(e){
-    $('#entryIn').value = e.in;
-    $('#entryOut').value = e.out;
-    $('#entryBreak').value = e.brk;
-  } else {
-    $('#entryIn').value = '';
-    $('#entryOut').value = '';
-    $('#entryBreak').value = 0;
-  }
-  window.scrollTo({top:0,behavior:'smooth'});
+  $('#entryType').value = e?.type === 'sick' ? 'sick' : 'work';
+  updateEntryTypeUI();
+  $('#entryIn').value = e?.type === 'sick' ? '' : (e?.in || '');
+  $('#entryOut').value = e?.type === 'sick' ? '' : (e?.out || '');
+  $('#entryBreak').value = e?.type === 'sick' ? 0 : (e?.brk || 0);
 }
 
 function wireEntryInteractions(){
@@ -1319,20 +1384,23 @@ function buildList(dates, calc){
     const h = calc.perDay[date];
     const e = monthData.days[date];
     const day = date.split('-')[2];
-    return `<div class="entry-row" data-date="${date}">
+    const isSick = e.type === 'sick';
+    const dayTime = isSick
+      ? `מחלה · ${fmtHours(h.total)} שעות`
+      : `${e.in}–${e.out}${e.brk>0?` · הפסקה ${e.brk} ד׳${h.excessBreakMin>0?` <span class="break-flag">(-${Math.round(h.excessBreakMin)} ד׳)</span>`:''}`:''}`;
+    const chips = isSick
+      ? `<span class="chip sick">מחלה · ${fmtHours(h.total)} ש׳</span>`
+      : `${h.regular>0?`<span class="chip regular">${fmtHours(h.regular)}</span>`:''}${h.ot125>0?`<span class="chip ot125">${fmtHours(h.ot125)}</span>`:''}${h.ot150>0?`<span class="chip ot150">${fmtHours(h.ot150)}</span>`:''}`;
+    return `<div class="entry-row ${isSick ? 'sick-entry-row' : ''}" data-date="${date}">
       <div class="entry-row-top">
         <div class="entry-main">
           <div class="entry-date">${day}.${String(currentDate.getMonth()+1).padStart(2,'0')}</div>
-          <div class="entry-time">${e.in}–${e.out}${e.brk>0?` · הפסקה ${e.brk} ד׳${h.excessBreakMin>0?` <span class="break-flag">(-${Math.round(h.excessBreakMin)} ד׳)</span>`:''}`:''}</div>
+          <div class="entry-time">${dayTime}</div>
         </div>
         <div class="entry-pay mono">${fmtMoney(h.pay)}</div>
         <button class="entry-del" data-del="${date}" aria-label="מחק">✕</button>
       </div>
-      <div class="entry-chips">
-        ${h.regular>0?`<span class="chip regular">${fmtHours(h.regular)}</span>`:''}
-        ${h.ot125>0?`<span class="chip ot125">${fmtHours(h.ot125)}</span>`:''}
-        ${h.ot150>0?`<span class="chip ot150">${fmtHours(h.ot150)}</span>`:''}
-      </div>
+      <div class="entry-chips">${chips}</div>
     </div>`;
   }).join('');
 }
@@ -1357,9 +1425,11 @@ function buildCalendar(calc){
     const isToday = date === todayString;
     let cls = 'cal-cell';
     if(hasEntry) cls += ' has-entry';
+    if(hasEntry && e.type === 'sick') cls += ' sick-day';
     if(isToday) cls += ' today';
     cells += `<div class="${cls}" data-date="${date}">
       <span class="cal-day-num">${d}</span>
+      ${hasEntry && e.type === 'sick' ? '<span class="cal-sick-mark">מ</span>' : ''}
       ${hasEntry ? `
         <div class="cal-bar">
           ${h.regular>0?`<span style="flex:${h.regular};background:var(--teal)"></span>`:''}
@@ -1386,11 +1456,14 @@ function escapeHtml(str){
 async function onAddEntry(ev){
   ev.preventDefault();
   const date = $('#entryDate').value;
+  const type = $('#entryType').value || 'work';
   const inT = $('#entryIn').value;
   const outT = $('#entryOut').value;
   const brk = Number($('#entryBreak').value)||0;
-  if(!date || !inT || !outT){ showToast('נא למלא את כל השדות'); return; }
-  if(timeToMinutes(outT) <= timeToMinutes(inT)){ showToast('שעת היציאה חייבת להיות אחרי הכניסה'); return; }
+  if(!date){ showToast('נא לבחור תאריך'); return; }
+  if(type === 'work' && (!inT || !outT)){ showToast('נא למלא שעת כניסה ויציאה'); return; }
+  if(type === 'work' && timeToMinutes(outT) <= timeToMinutes(inT)){ showToast('שעת היציאה חייבת להיות אחרי הכניסה'); return; }
+  if(type === 'sick' && !(Number(settings.sickDayHours) > 0)){ showToast('הגדר קודם את שעות התקן ליום מחלה בהגדרות'); return; }
 
   const dMonthKey = date.slice(0,7);
   if(dMonthKey !== monthKey(currentDate)){
@@ -1398,11 +1471,41 @@ async function onAddEntry(ev){
     currentDate = new Date(date+'T00:00:00');
     await loadMonth(currentDate);
   }
-  monthData.days[date] = { in: inT, out: outT, brk };
+  monthData.days[date] = type === 'sick' ? { type:'sick' } : { type:'work', in:inT, out:outT, brk };
   await saveMonth(currentDate);
   render();
   showToast('היום נשמר');
   checkCapWarning();
+}
+
+async function savePayslipComparison(){
+  const parseAmount = selector => {
+    const value = $(selector).value.trim();
+    if(value === '') return null;
+    const amount = Number(value);
+    return Number.isFinite(amount) && amount >= 0 ? amount : NaN;
+  };
+  const gross = parseAmount('#actualPayslipGross');
+  const net = parseAmount('#actualPayslipNet');
+  if(Number.isNaN(gross) || Number.isNaN(net)){ showToast('הסכומים בתלוש חייבים להיות מספרים חיוביים'); return; }
+  if(gross === null && net === null){ showToast('הזן לפחות סכום אחד מהתלוש'); return; }
+  const next = { gross, net };
+  const ok = await kvSet(`payslip:${monthKey(currentDate)}`, next);
+  if(!ok){ showToast('שגיאה בשמירת ההשוואה'); return; }
+  payslipActual = next;
+  writeInitialCache(currentUserId);
+  render();
+  showToast('ההשוואה לתלוש נשמרה');
+}
+
+async function clearPayslipComparison(){
+  const empty = { gross:null, net:null };
+  const ok = await kvSet(`payslip:${monthKey(currentDate)}`, empty);
+  if(!ok){ showToast('שגיאה בניקוי ההשוואה'); return; }
+  payslipActual = empty;
+  writeInitialCache(currentUserId);
+  render();
+  showToast('ההשוואה נוקתה');
 }
 
 async function changeMonth(delta){
@@ -1463,6 +1566,7 @@ function updateThemeButtonsUI(){
 function openSettings(){
   $('#setRate').value = settings.hourlyRate;
   $('#setRegularHours').value = settings.regularHours;
+  $('#setSickDayHours').value = settings.sickDayHours ?? 0;
   $('#setOt125Hours').value = settings.ot125Hours;
   $('#setMonthlyCap').value = settings.monthlyCap;
   $('#setFreeBreak').value = settings.freeBreakMinutes;
@@ -1555,6 +1659,7 @@ $('#addAddition').addEventListener('click', () => {
 $('#saveSettings').addEventListener('click', async () => {
   settings.hourlyRate = Number($('#setRate').value) || 0;
   settings.regularHours = Number($('#setRegularHours').value) || 0;
+  settings.sickDayHours = Math.max(0, Number($('#setSickDayHours').value) || 0);
   settings.ot125Hours = Number($('#setOt125Hours').value) || 0;
   settings.monthlyCap = Number($('#setMonthlyCap').value) || 0;
   settings.freeBreakMinutes = Number($('#setFreeBreak').value) || 0;
