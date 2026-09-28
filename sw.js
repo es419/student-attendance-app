@@ -1,4 +1,4 @@
-const CACHE_NAME = 'attendance-shell-v15';
+const CACHE_NAME = 'attendance-shell-v16';
 const SUPABASE_LIB = 'https://unpkg.com/@supabase/supabase-js@2.109.0/dist/umd/supabase.js';
 
 const APP_SHELL = [
@@ -79,10 +79,11 @@ self.addEventListener('fetch', (event) => {
 });
 
 async function navigationCacheFirst(refreshPromise){
+  // Prefer the latest app shell whenever online; use cache only if the network is unavailable.
+  const fresh = await refreshPromise;
+  if(fresh) return fresh;
   const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match('./index.html');
-  if(cached) return cached;
-  return (await refreshPromise) || Response.error();
+  return (await cache.match('./index.html')) || Response.error();
 }
 
 async function refreshNavigation(request){
