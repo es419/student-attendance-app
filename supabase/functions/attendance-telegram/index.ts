@@ -17,6 +17,7 @@ const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 const DEFAULT_SETTINGS = {
   hourlyRate: 39.58,
   regularHours: 8,
+  sickDayHours: 0,
   ot125Hours: 2,
   monthlyCap: 120,
   freeBreakMinutes: 40,
@@ -38,7 +39,7 @@ type ActiveSession = {
   breaks: Array<{ start: string; end: string | null; reminderId?: string }>;
 };
 
-type MonthData = { days: Record<string, { in: string; out: string; brk: number }> };
+type MonthData = { days: Record<string, { in?: string; out?: string; brk?: number; type?: 'work' | 'sick' }> };
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -368,8 +369,10 @@ async function todayText(userId: string) {
   const today = state.now.date;
   const saved = state.monthData.days?.[today];
   const lines = [`📋 היום — ${today}`];
-  if (saved) {
-    lines.push(`כניסה: ${saved.in}`, `יציאה: ${saved.out}`, `הפסקות: ${saved.brk || 0} דק׳`);
+  if (saved?.type === 'sick') {
+    lines.push(`יום מחלה · ${Number(state.settings.sickDayHours) || 0} שעות בתקן`);
+  } else if (saved) {
+    lines.push(`כניסה: ${saved.in ?? '—'}`, `יציאה: ${saved.out ?? '—'}`, `הפסקות: ${saved.brk || 0} דק׳`);
   } else {
     lines.push("אין עדיין משמרת שהסתיימה היום.");
   }
@@ -381,7 +384,9 @@ async function todayText(userId: string) {
   return { text: lines.join("\n"), session: state.activeSession };
 }
 
-function dayHours(entry: { in: string; out: string; brk: number }, freeBreakMinutes: number) {
+function dayHours(entry: { in?: string; out?: string; brk?: number; type?: 'work' | 'sick' }, freeBreakMinutes: number, sickDayHours = 0) {
+  if (entry.type === 'sick') return Math.max(0, Number(sickDayHours) || 0);
+  if (!entry.in || !entry.out) return 0;
   const span = Math.max(0, timeToMinutes(entry.out) - timeToMinutes(entry.in));
   const excessBreak = Math.max(0, (Number(entry.brk) || 0) - freeBreakMinutes);
   return Math.max(0, span - excessBreak) / 60;
@@ -393,11 +398,13 @@ async function monthText(userId: string) {
   const lines = [`📅 נוכחות ${state.now.month}`];
   let total = 0;
   const freeBreak = Number(state.settings.freeBreakMinutes) || 0;
+  const sickDayHours = Number(state.settings.sickDayHours) || 0;
   for (const date of dates) {
     const entry = state.monthData.days[date];
-    const hours = dayHours(entry, freeBreak);
+    const hours = dayHours(entry, freeBreak, sickDayHours);
     total += hours;
-    lines.push(`${date.slice(8, 10)}/${date.slice(5, 7)}  ${entry.in}–${entry.out}  · ${hours.toFixed(1)} ש׳`);
+    const description = entry.type === 'sick' ? 'מחלה' : `${entry.in ?? '—'}–${entry.out ?? '—'}`;
+    lines.push(`${date.slice(8, 10)}/${date.slice(5, 7)}  ${description}  · ${hours.toFixed(1)} ש׳`);
   }
   if (!dates.length) lines.push("אין עדיין משמרות שמורות החודש.");
   const cap = Number(state.settings.monthlyCap) || 0;
