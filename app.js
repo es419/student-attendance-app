@@ -49,6 +49,7 @@ let monthData = { days: {} }; // { "YYYY-MM-DD": { type, in, out, brk } }
 let payslipActual = { gross: null, net: null };
 let viewMode = 'list'; // 'calendar' | 'list'
 let activeTab = 'today'; // 'today' | 'shifts'
+let payslipOpen = false;
 let activeSession = null; // { date, checkIn, breaks:[{start,end|null}] } — persisted while a shift is running
 let currentUserId = null;
 
@@ -941,8 +942,8 @@ function payslipDiff(actual, estimated){
 }
 function buildPayslipCard(calc){
   const actual = normalizePayslip(payslipActual);
-  return `<section class="payslip-card">
-    <div class="payslip-head"><div><h2>השוואה לתלוש</h2><p>${HE_MONTHS[currentDate.getMonth()]} ${currentDate.getFullYear()}</p></div></div>
+  return `<details class="payslip-card" id="payslipDetails" ${payslipOpen ? 'open' : ''}>
+    <summary class="payslip-head"><div><h2>השוואה לתלוש</h2><p>${HE_MONTHS[currentDate.getMonth()]} ${currentDate.getFullYear()}</p></div></summary>
     <div class="payslip-inputs">
       <label>ברוטו בתלוש (₪)<input id="actualPayslipGross" type="number" min="0" step="0.01" inputmode="decimal" value="${actual.gross ?? ''}" placeholder="לא הוזן"></label>
       <label>נטו בתלוש (₪)<input id="actualPayslipNet" type="number" min="0" step="0.01" inputmode="decimal" value="${actual.net ?? ''}" placeholder="לא הוזן"></label>
@@ -953,7 +954,7 @@ function buildPayslipCard(calc){
       <div class="payslip-row"><strong>נטו</strong><span>${fmtMoney(calc.net)}</span><span>${actual.net === null ? '—' : fmtMoney(actual.net)}</span>${payslipDiff(actual.net,calc.net)}</div>
     </div>
     <div class="payslip-actions"><button type="button" id="savePayslipBtn">שמור השוואה</button><button type="button" id="clearPayslipBtn" class="payslip-clear">נקה</button></div>
-  </section>`;
+  </details>`;
 }
 
 async function exportMonthToExcel(calc){
@@ -1137,6 +1138,7 @@ async function exportAllHistoryToExcel(){
 
 function render(){
   const main = $('#mainContent');
+  const prevListScroll = document.getElementById('entriesContainer')?.scrollTop || 0;
   main.classList.remove('editor-open');
   const calc = computeMonth();
   const capPct = Math.min(100, (calc.rawTotal / settings.monthlyCap) * 100);
@@ -1152,6 +1154,7 @@ function render(){
 
     <div class="tab-panel" data-panel="today" ${activeTab!=='today' ? 'hidden' : ''}>
     ${buildShiftWidget()}
+    <div class="today-body">
     <section class="ledger-card">
       <div class="cap-label">
         <span>0</span>
@@ -1190,6 +1193,7 @@ function render(){
     </section>
     ${buildPayslipCard(calc)}
     </div>
+    </div>
 
     <div class="tab-panel" data-panel="shifts" ${activeTab!=='shifts' ? 'hidden' : ''}>
     <section class="month-select">
@@ -1214,7 +1218,7 @@ function render(){
         <div class="entry-work-fields" id="entryWorkFields">
           <label>שעת כניסה <input type="time" id="entryIn"></label>
           <label>שעת יציאה <input type="time" id="entryOut"></label>
-          <label>הפסקה (דק') <input type="number" id="entryBreak" value="0" min="0"></label>
+          <label>הפסקה (דק') <input type="number" id="entryBreak" value="0" min="0" inputmode="numeric"></label>
         </div>
         <p class="sick-entry-note" id="sickDayNote" hidden>${Number(settings.sickDayHours) > 0 ? `מחלה: ${fmtHours(settings.sickDayHours)} שעות בתעריף רגיל, בתשלום מהיום הראשון.` : 'כדי להזין יום מחלה, הגדירו תחילה את שעות התקן בהגדרות.'}</p>
         <button type="submit">שמור יום</button>
@@ -1267,6 +1271,13 @@ function render(){
   wireEntryInteractions();
   wireShiftWidget();
   tickShiftTimer();
+  main.classList.toggle('shifts-active', activeTab === 'shifts');
+  main.classList.toggle('today-active', activeTab === 'today');
+  document.getElementById('payslipDetails')?.addEventListener('toggle', ev => { payslipOpen = ev.target.open; });
+  if(prevListScroll){
+    const list = document.getElementById('entriesContainer');
+    if(list) list.scrollTop = prevListScroll;
+  }
 }
 
 function switchTab(tab){
@@ -1274,6 +1285,8 @@ function switchTab(tab){
   activeTab = tab;
   const main = $('#mainContent');
   main.scrollTop = 0;
+  main.classList.toggle('shifts-active', tab === 'shifts');
+  main.classList.toggle('today-active', tab === 'today');
   document.querySelectorAll('[data-tab]').forEach(btn => {
     const selected = btn.dataset.tab === tab;
     btn.classList.toggle('active', selected);
