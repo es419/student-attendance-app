@@ -1138,7 +1138,6 @@ async function exportAllHistoryToExcel(){
 function render(){
   const main = $('#mainContent');
   main.classList.remove('editor-open');
-  main.classList.toggle('shifts-view', activeTab === 'shifts');
   const calc = computeMonth();
   const capPct = Math.min(100, (calc.rawTotal / settings.monthlyCap) * 100);
   const overPct = calc.capExceeded ? 100 - (settings.monthlyCap/calc.rawTotal*100) : 0;
@@ -1274,7 +1273,6 @@ function switchTab(tab){
   if(tab !== 'today' && tab !== 'shifts') return;
   activeTab = tab;
   const main = $('#mainContent');
-  main.classList.toggle('shifts-view', tab === 'shifts');
   main.scrollTop = 0;
   document.querySelectorAll('[data-tab]').forEach(btn => {
     const selected = btn.dataset.tab === tab;
