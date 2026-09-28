@@ -112,6 +112,10 @@ if ('serviceWorker' in navigator) {
     <label>שעות רגילות ליום
       <input type="number" id="setRegularHours" step="0.5">
     </label>
+    <label>שעות לתשלום ביום מחלה
+      <input type="number" id="setSickDayHours" min="0" step="0.25">
+    </label>
+    <p class="settings-note">יום מחלה מחושב לפי מספר השעות שהגדרת, בתעריף הרגיל ומהיום הראשון.</p>
     <label>שעות ב-125% ליום (אחרי הרגילות)
       <input type="number" id="setOt125Hours" step="0.5">
     </label>
@@ -175,6 +179,6 @@ if ('serviceWorker' in navigator) {
 </div>
 
 <script src="https://unpkg.com/@supabase/supabase-js@2.109.0/dist/umd/supabase.js"></script>
-<script src="app.js?v=attendance-scroll-v2"></script>
+<script src="app.js?v=attendance-payslip-v3"></script>
 </body>
 </html>
