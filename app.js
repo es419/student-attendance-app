@@ -28,7 +28,6 @@ const DEFAULT_SETTINGS = {
   freeBreakMinutes: 40,
   capWarnHours: 10,
   attendanceRemindersEnabled: true,
-  checkInReminderTime: '08:00',
   checkOutReminderTime: '16:00',
   checkOutRepeatMinutes: 30,
   themeMode: 'system',
@@ -308,28 +307,8 @@ async function cancelAttendanceReminderMessages(messages){
 
 async function scheduleCheckInReminders(){
   if(!currentUserId) return;
+  // Check-in reminders are disabled. Remove any unsent reminders left by older app versions.
   await cancelAttendanceReminderMessages([ATTENDANCE_REMINDER_MESSAGES.checkIn]);
-  if(!settings.attendanceRemindersEnabled || !(await hasPushSubscription())) return;
-
-  const clock = parseClockTime(settings.checkInReminderTime, { hour:8, minute:0 });
-  const rows = [];
-  const now = new Date();
-
-  // Keep a rolling month of reminders. Every normal app launch refreshes it.
-  for(let offset = 0; offset < 31; offset++){
-    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset, clock.hour, clock.minute, 0, 0);
-    const weekday = day.getDay();
-    if(weekday === 5 || weekday === 6 || day.getTime() <= Date.now()) continue; // א׳–ה׳ only
-    rows.push({
-      user_id: currentUserId,
-      fire_at: day.toISOString(),
-      message: ATTENDANCE_REMINDER_MESSAGES.checkIn
-    });
-  }
-  if(rows.length){
-    const { error } = await supabaseClient.from('break_reminders').insert(rows);
-    if(error) throw error;
-  }
 }
 
 async function scheduleCheckOutReminders(){
@@ -1489,7 +1468,6 @@ function openSettings(){
   $('#setFreeBreak').value = settings.freeBreakMinutes;
   $('#setCapWarnHours').value = settings.capWarnHours;
   $('#setAttendanceReminders').value = settings.attendanceRemindersEnabled ? 'on' : 'off';
-  $('#setCheckInReminderTime').value = settings.checkInReminderTime || '08:00';
   $('#setCheckOutReminderTime').value = settings.checkOutReminderTime || '16:00';
   $('#setCheckOutRepeatMinutes').value = settings.checkOutRepeatMinutes ?? 30;
   updateThemeButtonsUI();
@@ -1582,7 +1560,6 @@ $('#saveSettings').addEventListener('click', async () => {
   settings.freeBreakMinutes = Number($('#setFreeBreak').value) || 0;
   settings.capWarnHours = Number($('#setCapWarnHours').value) || 0;
   settings.attendanceRemindersEnabled = $('#setAttendanceReminders').value === 'on';
-  settings.checkInReminderTime = $('#setCheckInReminderTime').value || '08:00';
   settings.checkOutReminderTime = $('#setCheckOutReminderTime').value || '16:00';
   settings.checkOutRepeatMinutes = Math.max(0, Number($('#setCheckOutRepeatMinutes').value) || 0);
   document.querySelectorAll('#deductionsSettings .deduction-row').forEach((row,i) => {

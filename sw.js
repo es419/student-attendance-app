@@ -1,11 +1,11 @@
-const CACHE_NAME = 'attendance-shell-v12';
+const CACHE_NAME = 'attendance-shell-v13';
 const SUPABASE_LIB = 'https://unpkg.com/@supabase/supabase-js@2.109.0/dist/umd/supabase.js';
 
 const APP_SHELL = [
   './',
   './index.html',
   './styles.css',
-  './app.js?v=attendance-reminders-v1',
+  './app.js?v=attendance-scroll-v2',
   './manifest.json',
   './icon-180.png',
   './icon-192.png',
