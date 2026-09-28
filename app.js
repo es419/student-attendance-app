@@ -1137,6 +1137,7 @@ async function exportAllHistoryToExcel(){
 
 function render(){
   const main = $('#mainContent');
+  main.classList.remove('editor-open');
   main.classList.toggle('shifts-view', activeTab === 'shifts');
   const calc = computeMonth();
   const capPct = Math.min(100, (calc.rawTotal / settings.monthlyCap) * 100);
@@ -1212,9 +1213,9 @@ function render(){
           </select>
         </label>
         <div class="entry-work-fields" id="entryWorkFields">
-          <label>הפסקה (דק') <input type="number" id="entryBreak" value="0" min="0"></label>
           <label>שעת כניסה <input type="time" id="entryIn"></label>
           <label>שעת יציאה <input type="time" id="entryOut"></label>
+          <label>הפסקה (דק') <input type="number" id="entryBreak" value="0" min="0"></label>
         </div>
         <p class="sick-entry-note" id="sickDayNote" hidden>${Number(settings.sickDayHours) > 0 ? `מחלה: ${fmtHours(settings.sickDayHours)} שעות בתעריף רגיל, בתשלום מהיום הראשון.` : 'כדי להזין יום מחלה, הגדירו תחילה את שעות התקן בהגדרות.'}</p>
         <button type="submit">שמור יום</button>
@@ -1356,6 +1357,7 @@ function updateEntryTypeUI(){
 function closeEntryEditor(){
   const overlay = document.getElementById('entryEditorOverlay');
   if(overlay) overlay.hidden = true;
+  document.getElementById('mainContent')?.classList.remove('editor-open');
 }
 
 function openEntryEditor(date = null){
@@ -1371,6 +1373,7 @@ function openEntryEditor(date = null){
   }
   const overlay = document.getElementById('entryEditorOverlay');
   if(overlay) overlay.hidden = false;
+  document.getElementById('mainContent')?.classList.add('editor-open');
 }
 
 function fillFormForDate(date){
