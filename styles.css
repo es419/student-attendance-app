@@ -1175,34 +1175,28 @@ main.shifts-active .entries-list #entriesContainer{
 }
 .settings-drawer{max-height:min(88%,760px);}
 
-/* ---------- entry editor: vertically centre date/time values (iOS Safari) ---------- */
+/* ---------- entry editor: date/time values ----------
+   Vertical centring is done with line-height (below). Horizontal alignment is plain
+   text-align:right: flex + justify-content flips sides depending on the engine's
+   internal direction (it pushed the value to the left on iOS). */
 .entry-editor #entryForm input[type="date"],
 .entry-editor #entryForm input[type="time"]{
-  display:flex;
-  align-items:center;
-  justify-content:flex-end;
+  display:block;
   padding-top:0;
   padding-bottom:0;
-  line-height:1.2;
+  text-align:right;
 }
 .entry-editor #entryForm input[type="date"]::-webkit-date-and-time-value,
 .entry-editor #entryForm input[type="time"]::-webkit-date-and-time-value{
-  display:flex;
-  align-items:center;
-  justify-content:flex-end;
-  min-height:1.5em;
+  display:block;
   margin:0;
   padding:0;
   text-align:right;
 }
 .entry-editor #entryForm input[type="date"]::-webkit-datetime-edit,
 .entry-editor #entryForm input[type="time"]::-webkit-datetime-edit{
-  display:flex;
-  align-items:center;
   padding:0;
-  line-height:1.2;
 }
-
 
 /* ---------- date/time values: centre by line-height (works even when iOS ignores flex on the input) ---------- */
 .entry-editor #entryForm input[type="date"],
