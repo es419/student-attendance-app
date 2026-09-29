@@ -1202,3 +1202,22 @@ main.shifts-active .entries-list #entriesContainer{
   padding:0;
   line-height:1.2;
 }
+
+
+/* ---------- date/time values: centre by line-height (works even when iOS ignores flex on the input) ---------- */
+.entry-editor #entryForm input[type="date"],
+.entry-editor #entryForm input[type="time"]{
+  line-height:48px;
+}
+.entry-editor #entryForm input[type="date"]::-webkit-date-and-time-value,
+.entry-editor #entryForm input[type="time"]::-webkit-date-and-time-value{
+  min-height:48px;
+  line-height:48px;
+  margin:0;
+  padding:0;
+}
+.entry-editor #entryForm input[type="date"]::-webkit-datetime-edit,
+.entry-editor #entryForm input[type="time"]::-webkit-datetime-edit{
+  line-height:48px;
+  padding:0;
+}
