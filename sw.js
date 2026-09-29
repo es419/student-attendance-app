@@ -1,11 +1,11 @@
-const CACHE_NAME = 'attendance-shell-v26';
-const SUPABASE_LIB = 'https://unpkg.com/@supabase/supabase-js@2.109.0/dist/umd/supabase.js';
-
+const CACHE_NAME = 'attendance-shell-v27';
 const APP_SHELL = [
   './',
   './index.html',
-  './styles.css?v=attendance-redesign-v8',
-  './app.js?v=attendance-redesign-v7',
+  './styles.css?v=attendance-redesign-v9',
+  './calc.js?v=attendance-redesign-v9',
+  './app.js?v=attendance-redesign-v9',
+  './vendor/supabase.js',
   './manifest.json',
   './icon-180.png',
   './icon-192.png',
@@ -27,17 +27,6 @@ self.addEventListener('install', (event) => {
       await cache.put(path, response);
     }));
 
-    // Warm the exact Supabase browser bundle too. A CDN failure must never block
-    // installation of the app shell, so this cache fill is best-effort.
-    try{
-      const response = await fetch(SUPABASE_LIB, { cache: 'reload' });
-      if(response.ok || response.type === 'opaque'){
-        await cache.put(SUPABASE_LIB, response.clone());
-      }
-    }catch(error){
-      console.warn('Supabase bundle could not be pre-cached', error);
-    }
-
     await self.skipWaiting();
   })());
 });
@@ -58,13 +47,6 @@ self.addEventListener('fetch', (event) => {
   if(event.request.method !== 'GET') return;
 
   const url = new URL(event.request.url);
-
-  // Keep the pinned Supabase runtime available locally after the first successful
-  // install/fetch. Because the URL is version-pinned, cache-first is safe here.
-  if(url.href === SUPABASE_LIB){
-    event.respondWith(cacheFirstExternal(event.request));
-    return;
-  }
 
   if(url.origin !== self.location.origin) return;
 
@@ -102,22 +84,6 @@ async function refreshNavigation(request){
     return response;
   }catch{
     return null;
-  }
-}
-
-async function cacheFirstExternal(request){
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
-  if(cached) return cached;
-
-  try{
-    const response = await fetch(request);
-    if(response.ok || response.type === 'opaque'){
-      await cache.put(request, response.clone());
-    }
-    return response;
-  }catch{
-    return Response.error();
   }
 }
 

@@ -2,7 +2,7 @@
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>נוכחות+</title>
 <link rel="preload" as="image" href="icon-192.png" fetchpriority="high">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -46,7 +46,7 @@ if ('serviceWorker' in navigator) {
 </script>
 <link rel="dns-prefetch" href="//ojzemdselyxxscbbvssm.supabase.co">
 <link rel="preconnect" href="https://ojzemdselyxxscbbvssm.supabase.co" crossorigin>
-<link rel="stylesheet" href="styles.css?v=attendance-redesign-v8">
+<link rel="stylesheet" href="styles.css?v=attendance-redesign-v9">
 </head>
 <body>
 <div class="initial-splash" id="initialSplash" aria-live="polite">
@@ -63,8 +63,8 @@ if ('serviceWorker' in navigator) {
     <h1>נוכחות+</h1>
     <p class="auth-sub">התחברות לחשבון האישי שלך</p>
     <form id="authForm">
-      <label>אימייל <input type="email" id="authEmail" required></label>
-      <label>סיסמה <input type="password" id="authPassword" required minlength="6"></label>
+      <label>אימייל <input type="email" id="authEmail" required autocomplete="email" autocapitalize="off" spellcheck="false"></label>
+      <label>סיסמה <input type="password" id="authPassword" required minlength="6" autocomplete="current-password"></label>
       <button type="submit" id="authSubmitBtn">התחברות</button>
     </form>
     <button type="button" id="authToggleMode" class="auth-toggle-link">אין לך חשבון? הרשמה</button>
@@ -175,10 +175,11 @@ if ('serviceWorker' in navigator) {
     <p class="settings-note">כל הנתונים נשמרים בחשבון שלך בענן ולא רק על המכשיר — הם יהיו זמינים מכל מכשיר שבו תתחבר.</p>
   </aside>
   <div class="drawer-overlay" id="drawerOverlay" hidden></div>
-  <div class="toast" id="toast"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 </div>
 
-<script src="https://unpkg.com/@supabase/supabase-js@2.109.0/dist/umd/supabase.js"></script>
-<script src="app.js?v=attendance-redesign-v7"></script>
+<script src="vendor/supabase.js"></script>
+<script src="calc.js?v=attendance-redesign-v9"></script>
+<script src="app.js?v=attendance-redesign-v9"></script>
 </body>
 </html>

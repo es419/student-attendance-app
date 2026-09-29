@@ -41,6 +41,16 @@ type ActiveSession = {
 
 type MonthData = { days: Record<string, { in?: string; out?: string; brk?: number; type?: 'work' | 'sick' }> };
 
+// Constant-time string comparison (avoids leaking the secret through timing).
+function safeEqual(a: string, b: string) {
+  const enc = new TextEncoder();
+  const x = enc.encode(a);
+  const y = enc.encode(b);
+  let diff = x.length ^ y.length;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
+  return diff === 0;
+}
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -82,6 +92,31 @@ function localParts(date = new Date()) {
 function timeToMinutes(value: string) {
   const [h, m] = value.split(":").map(Number);
   return h * 60 + m;
+}
+
+// A shift longer than this is treated as a forgotten clock-out, never guessed.
+const MAX_SHIFT_MINUTES = 16 * 60;
+
+// Minutes from start to end on a 24h clock; wraps past midnight (22:00 -> 06:00 = 480).
+function minutesBetween(start: string, end: string) {
+  return (((timeToMinutes(end) - timeToMinutes(start)) % 1440) + 1440) % 1440;
+}
+
+// Minutes since the epoch of a local (Asia/Jerusalem) date + "HH:MM", for differences only.
+function localMinutes(date: string, time: string) {
+  const [y, m, d] = date.split("-").map(Number);
+  return Date.UTC(y, m - 1, d) / 60_000 + timeToMinutes(time);
+}
+
+function elapsedMinutesSince(session: ActiveSession, now: { date: string; time: string }) {
+  return localMinutes(now.date, now.time) - localMinutes(session.date, session.checkIn);
+}
+
+function breakMinutes(session: ActiveSession, openBreakEnd?: string) {
+  return session.breaks.reduce((sum, b) => {
+    const end = b.end ?? openBreakEnd;
+    return end ? sum + minutesBetween(b.start, end) : sum;
+  }, 0);
 }
 
 function isOnBreak(session: ActiveSession | null) {
@@ -288,29 +323,34 @@ async function performAction(userId: string, action: string) {
   if (action === "clock_out") {
     if (!session) return "אין כרגע משמרת פעילה.";
     const checkout = now.time;
+    const elapsed = elapsedMinutesSince(session, now);
+    if (elapsed > MAX_SHIFT_MINUTES) {
+      // Almost certainly a forgotten clock-out. Leave everything untouched so the
+      // app can ask for the real end time.
+      return "המשמרת פתוחה כבר מעל 16 שעות. פתח את נוכחות+ והזן את שעת היציאה האמיתית.";
+    }
+    const checkin = session.checkIn;
+    const startedBreak = isOnBreak(session);
+    const totalBreak = breakMinutes(session, checkout);
+
     await cancelAttendanceReminders(userId, [
       ATTENDANCE_REMINDER_MESSAGES.checkOut,
       ATTENDANCE_REMINDER_MESSAGES.checkOutRepeat,
     ]);
-    if (isOnBreak(session)) {
-      const last = session.breaks[session.breaks.length - 1];
-      last.end = checkout;
-      await cancelReminder(last.reminderId);
-    }
-    const checkin = session.checkIn;
-    if (timeToMinutes(checkout) <= timeToMinutes(checkin)) {
-      return "שעת הסיום יצאה לפני שעת הכניסה. במקרה כזה עדיף לערוך את היום ידנית באפליקציה.";
+    if (startedBreak) await cancelReminder(session.breaks[session.breaks.length - 1].reminderId);
+
+    if (elapsed < 1) {
+      // in and out within the same minute: an accidental tap, not a shift
+      await deleteKv(userId, "activeSession");
+      return "המשמרת נמשכה פחות מדקה ולא נשמרה.";
     }
 
-    const totalBreak = session.breaks.reduce((sum, b) => {
-      const end = b.end ?? checkout;
-      return sum + Math.max(0, timeToMinutes(end) - timeToMinutes(b.start));
-    }, 0);
-
+    // Save the day first; only then close the shift, so a failure loses nothing.
     const sessionMonth = session.date.slice(0, 7);
     const key = `attendance:${sessionMonth}`;
     const rows = key === state.monthKey ? { [key]: state.monthData } : await getKv(userId, [key]);
     const monthData = (rows[key] ?? { days: {} }) as MonthData;
+    if (!monthData.days) monthData.days = {};
     monthData.days[session.date] = { in: checkin, out: checkout, brk: totalBreak };
     await setKv(userId, key, monthData);
     await deleteKv(userId, "activeSession");
@@ -320,13 +360,8 @@ async function performAction(userId: string, action: string) {
   return "פעולה לא מוכרת.";
 }
 
-function elapsedText(session: ActiveSession, nowTime: string) {
-  let minutes = Math.max(0, timeToMinutes(nowTime) - timeToMinutes(session.checkIn));
-  const breakMinutes = session.breaks.reduce((sum, b) => {
-    if (!b.end) return sum;
-    return sum + Math.max(0, timeToMinutes(b.end) - timeToMinutes(b.start));
-  }, 0);
-  minutes = Math.max(0, minutes - breakMinutes);
+function elapsedText(session: ActiveSession, now: { date: string; time: string }) {
+  const minutes = Math.max(0, elapsedMinutesSince(session, now) - breakMinutes(session));
   return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
@@ -357,11 +392,17 @@ async function statusText(userId: string) {
   const state = await loadState(userId);
   const s = state.activeSession;
   if (!s) return { text: "אין כרגע משמרת פעילה.", session: null as ActiveSession | null };
+  if (elapsedMinutesSince(s, state.now) > MAX_SHIFT_MINUTES) {
+    return {
+      text: `⚠️ משמרת פתוחה מאז ${s.date.slice(8, 10)}/${s.date.slice(5, 7)} ${s.checkIn}.\nנראה ששכחת להחתים יציאה — פתח את נוכחות+ והזן את שעת היציאה האמיתית.`,
+      session: s,
+    };
+  }
   if (isOnBreak(s)) {
     const last = s.breaks[s.breaks.length - 1];
     return { text: `☕ בהפסקה מאז ${last.start}\nכניסה למשמרת: ${s.checkIn}`, session: s };
   }
-  return { text: `🟢 במשמרת מאז ${s.checkIn}\nזמן משמרת: ${elapsedText(s, state.now.time)}`, session: s };
+  return { text: `🟢 במשמרת מאז ${s.checkIn}\nזמן משמרת: ${elapsedText(s, state.now)}`, session: s };
 }
 
 async function todayText(userId: string) {
@@ -387,7 +428,8 @@ async function todayText(userId: string) {
 function dayHours(entry: { in?: string; out?: string; brk?: number; type?: 'work' | 'sick' }, freeBreakMinutes: number, sickDayHours = 0) {
   if (entry.type === 'sick') return Math.max(0, Number(sickDayHours) || 0);
   if (!entry.in || !entry.out) return 0;
-  const span = Math.max(0, timeToMinutes(entry.out) - timeToMinutes(entry.in));
+  const wrapped = minutesBetween(entry.in, entry.out);
+  const span = wrapped > 0 && wrapped <= MAX_SHIFT_MINUTES ? wrapped : 0;
   const excessBreak = Math.max(0, (Number(entry.brk) || 0) - freeBreakMinutes);
   return Math.max(0, span - excessBreak) / 60;
 }
@@ -515,10 +557,13 @@ async function handleCallback(query: CallbackQuery) {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ ok: true, service: "attendance-telegram" });
-  if (WEBHOOK_SECRET) {
-    const provided = req.headers.get("x-telegram-bot-api-secret-token") ?? "";
-    if (provided !== WEBHOOK_SECRET) return json({ error: "unauthorized" }, 401);
+  // Fail closed: without a configured secret anyone could post fake updates.
+  if (!WEBHOOK_SECRET) {
+    console.error("TELEGRAM_WEBHOOK_SECRET is not set; refusing all requests");
+    return json({ error: "webhook not configured" }, 503);
   }
+  const provided = req.headers.get("x-telegram-bot-api-secret-token") ?? "";
+  if (!safeEqual(provided, WEBHOOK_SECRET)) return json({ error: "unauthorized" }, 401);
 
   try {
     const update = await req.json() as Update;

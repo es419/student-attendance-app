@@ -10,7 +10,7 @@ function ensureXLSXLoaded(){
   if(xlsxLoadPromise) return xlsxLoadPromise;
   xlsxLoadPromise = new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.src = 'vendor/xlsx.full.min.js';
     s.onload = () => resolve();
     s.onerror = () => { xlsxLoadPromise = null; reject(new Error('failed to load xlsx')); };
     document.head.appendChild(s);
@@ -97,12 +97,25 @@ function nowTimeStr(){
 }
 
 let toastTimer = null;
-function showToast(msg){
+function showToast(msg, opts = {}){
   const t = $('#toast');
   t.textContent = msg;
+  t.classList.toggle('has-action', !!opts.action);
+  if(opts.action){
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'toast-action';
+    b.textContent = opts.action.label;
+    b.addEventListener('click', () => {
+      clearTimeout(toastTimer);
+      t.classList.remove('show');
+      opts.action.onClick();
+    });
+    t.appendChild(b);
+  }
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=>t.classList.remove('show'), 2200);
+  toastTimer = setTimeout(() => t.classList.remove('show'), opts.duration || (opts.action ? 6000 : 2200));
 }
 
 // ---- push notifications (break reminders) ----
@@ -364,7 +377,7 @@ async function refreshAttendanceReminderSchedule(){
 // ---- monthly hour-cap proximity warning ----
 // Reuses the same break_reminders table + cron/Edge Function — just fires immediately (fire_at = now)
 // instead of being scheduled ahead of time. Only ever sent once per calendar month.
-async function checkCapWarning(){
+async function checkCapWarningOnce(){
   if(settings.capWarnHours <= 0) return; // disabled
   if(monthKey(currentDate) !== monthKey(new Date())) return; // only relevant for the real current month
   const sub = await getCurrentPushSubscription();
@@ -391,6 +404,13 @@ async function checkCapWarning(){
   }catch(e){
     console.error('checkCapWarning failed', e);
   }
+}
+
+let capWarningBusy = false;
+async function checkCapWarning(){
+  if(capWarningBusy) return; // ticker + clock-out can fire together; warn once
+  capWarningBusy = true;
+  try{ await checkCapWarningOnce(); } finally{ capWarningBusy = false; }
 }
 
 function deepClone(obj){
@@ -460,11 +480,13 @@ async function kvSet(key, value){
 async function kvDelete(key){
   try{
     const userId = currentUserId;
-    if(!userId) return;
+    if(!userId) return false;
     const { error } = await supabaseClient.from('kv_store').delete().eq('user_id', userId).eq('key', key);
     if(error) throw error;
+    return true;
   }catch(e){
     console.error('kvDelete error', e);
+    return false;
   }
 }
 
@@ -608,16 +630,26 @@ async function saveSettingsToStorage(){
 
 async function loadMonth(d){
   const mk = monthKey(d);
-  const [saved, savedPayslip] = await Promise.all([kvGet(`attendance:${mk}`), kvGet(`payslip:${mk}`)]);
+  // strict reads: a network error must not look like an empty month
+  const [saved, savedPayslip] = await Promise.all([kvGetStrict(`attendance:${mk}`), kvGetStrict(`payslip:${mk}`)]);
   monthData = saved || { days:{} };
   payslipActual = normalizePayslip(savedPayslip);
 }
 
-async function saveMonth(d){
-  if(monthKey(d) === monthKey(currentDate)) writeInitialCache(currentUserId);
-  const key = `attendance:${monthKey(d)}`;
-  const ok = await kvSet(key, monthData);
-  if(!ok) showToast('שגיאה בשמירה');
+// Read-modify-write against the freshest server copy, so an edit made from another
+// device or the Telegram bot is never overwritten by a stale local snapshot.
+async function mutateMonth(mk, mutator){
+  const key = `attendance:${mk}`;
+  const latest = (await kvGetStrict(key)) || { days:{} };
+  if(!latest.days || typeof latest.days !== 'object') latest.days = {};
+  mutator(latest);
+  const ok = await kvSet(key, latest);
+  if(!ok) throw new Error('failed to save month');
+  if(mk === monthKey(currentDate)){
+    monthData = latest;
+    writeInitialCache(currentUserId);
+  }
+  return latest;
 }
 
 // ---- active shift (quick clock in/out + break) ----
@@ -650,9 +682,11 @@ async function saveActiveSession(){
   if(activeSession){
     const ok = await kvSet('activeSession', activeSession);
     if(!ok) showToast('שגיאה בשמירת סטטוס המשמרת');
-  } else {
-    await kvDelete('activeSession');
+    return ok;
   }
+  const ok = await kvDelete('activeSession');
+  if(!ok) showToast('שגיאה בסגירת המשמרת. רענן ונסה שוב');
+  return ok;
 }
 
 function isOnBreak(){
@@ -662,6 +696,7 @@ function isOnBreak(){
 }
 
 let shiftActionBusy = false;
+let editorResolvesSession = false; // the entry editor is being used to close a forgotten shift
 
 async function syncActiveSessionFromCloud(){
   const userId = currentUserId;
@@ -680,42 +715,58 @@ async function syncActiveSessionFromCloud(){
 async function runShiftAction(action){
   if(shiftActionBusy) return;
   shiftActionBusy = true;
+  // Capture the moment of the press now: the network round-trips below must never
+  // move the recorded time.
+  const stamp = { time: nowTimeStr(), date: todayStr(), at: Date.now() };
   try{
     // Telegram and another device can change the shift while this PWA is asleep.
     // Re-read the authoritative active session before every attendance mutation.
     await syncActiveSessionFromCloud();
-    await action();
+    await action(stamp);
   }catch(e){
     console.error('shift action failed', e);
-    showToast('לא ניתן לאמת את מצב המשמרת. בדוק חיבור ונסה שוב.');
+    showToast('הפעולה לא נשמרה. בדוק חיבור ונסה שוב.');
     render();
   }finally{
     shiftActionBusy = false;
   }
 }
 
+// Ends the running shift: cancels its pending reminders and removes it from the cloud.
+async function closeActiveSession(session){
+  await cancelAttendanceReminderMessages([
+    ATTENDANCE_REMINDER_MESSAGES.checkOut,
+    ATTENDANCE_REMINDER_MESSAGES.checkOutRepeat
+  ]);
+  for(const b of (session.breaks || [])) await cancelBreakReminder(b.reminderId);
+  activeSession = null;
+  return saveActiveSession();
+}
+
 async function clockIn(){
-  return runShiftAction(async () => {
+  return runShiftAction(async (stamp) => {
     if(activeSession){
       render();
       showToast('כבר קיימת משמרת פעילה');
       return;
     }
-    activeSession = { date: todayStr(), checkIn: nowTimeStr(), breaks: [] };
-    await saveActiveSession();
-    await cancelAttendanceReminderMessages([ATTENDANCE_REMINDER_MESSAGES.checkIn]);
-    await scheduleCheckOutReminders();
+    activeSession = { date: stamp.date, checkIn: stamp.time, breaks: [] };
+    if(!(await saveActiveSession())){ activeSession = null; render(); return; }
+    try{
+      await cancelAttendanceReminderMessages([ATTENDANCE_REMINDER_MESSAGES.checkIn]);
+      await scheduleCheckOutReminders();
+    }catch(e){ console.error('reminders failed', e); } // reminders are best-effort
     render();
     showToast('המשמרת התחילה — בהצלחה!');
   });
 }
 
 async function startBreak(){
-  return runShiftAction(async () => {
+  return runShiftAction(async (stamp) => {
     if(!activeSession){ render(); showToast('אין משמרת פעילה'); return; }
     if(isOnBreak()){ render(); showToast('אתה כבר בהפסקה'); return; }
-    activeSession.breaks.push({ start: nowTimeStr(), end: null });
-    await saveActiveSession();
+    activeSession.breaks.push({ start: stamp.time, end: null });
+    if(!(await saveActiveSession())){ activeSession.breaks.pop(); render(); return; }
     render();
     showToast('יצאת להפסקה');
     // schedule a push reminder for 10 minutes before the free break allowance runs out
@@ -728,64 +779,73 @@ async function startBreak(){
 }
 
 async function endBreak(){
-  return runShiftAction(async () => {
+  return runShiftAction(async (stamp) => {
     if(!activeSession){ render(); showToast('אין משמרת פעילה'); return; }
     if(!isOnBreak()){ render(); showToast('אתה לא בהפסקה כרגע'); return; }
     const lastBreak = activeSession.breaks[activeSession.breaks.length-1];
-    lastBreak.end = nowTimeStr();
+    lastBreak.end = stamp.time;
+    if(!(await saveActiveSession())){ lastBreak.end = null; render(); return; }
     await cancelBreakReminder(lastBreak.reminderId);
-    await saveActiveSession();
     render();
     showToast('חזרת מהפסקה');
   });
 }
 
 async function clockOut(){
-  return runShiftAction(async () => {
+  return runShiftAction(async (stamp) => {
     if(!activeSession){ render(); showToast('אין משמרת פעילה'); return; }
-    const checkOut = nowTimeStr();
-    await cancelAttendanceReminderMessages([
-      ATTENDANCE_REMINDER_MESSAGES.checkOut,
-      ATTENDANCE_REMINDER_MESSAGES.checkOutRepeat
-    ]);
-    if(isOnBreak()){
-      const lastBreak = activeSession.breaks[activeSession.breaks.length-1];
-      lastBreak.end = checkOut;
-      await cancelBreakReminder(lastBreak.reminderId);
-    }
-    const date = activeSession.date;
-    const checkIn = activeSession.checkIn;
-    const totalBreakMin = activeSession.breaks.reduce((sum,b) => {
-      const end = b.end || checkOut;
-      return sum + Math.max(0, timeToMinutes(end) - timeToMinutes(b.start));
-    }, 0);
-
-    if(timeToMinutes(checkOut) <= timeToMinutes(checkIn)){
-      showToast('שעת הסיום יצאה לפני ההתחלה — ערוך את היום ידנית ברשימה');
-      activeSession = null;
-      await saveActiveSession();
+    if(AttendanceCalc.isStaleSession(activeSession, stamp.at)){
+      // Almost certainly a forgotten clock-out: never guess the end time.
       render();
+      showToast('המשמרת פתוחה מעל 16 שעות — הזן שעת יציאה');
+      openStaleSessionEditor();
+      return;
+    }
+    const { date, checkIn } = activeSession;
+    const checkOut = stamp.time;
+    const breaks = activeSession.breaks.map(b => ({ ...b }));
+    const lastBreak = breaks[breaks.length - 1];
+    if(lastBreak && !lastBreak.end) lastBreak.end = checkOut;
+    const totalBreakMin = AttendanceCalc.sessionBreakMinutes({ breaks });
+
+    if(AttendanceCalc.minutesBetween(checkIn, checkOut) === 0){
+      // in and out within the same minute: an accidental tap, not a shift
+      await closeActiveSession(activeSession);
+      render();
+      showToast('המשמרת נמשכה פחות מדקה ולא נשמרה');
       return;
     }
 
-    // Always merge into the freshest month row so a Telegram/other-device edit
-    // cannot be overwritten by an older local snapshot.
-    const targetDate = new Date(date+'T00:00:00');
-    const targetKey = `attendance:${monthKey(targetDate)}`;
-    const latest = await kvGetStrict(targetKey);
-    const latestMonth = latest || { days:{} };
-    latestMonth.days[date] = { in: checkIn, out: checkOut, brk: totalBreakMin };
-    const ok = await kvSet(targetKey, latestMonth);
-    if(!ok) throw new Error('failed to save month');
+    // Save the day first; only then close the running shift. If the save fails the
+    // shift stays open and nothing is lost. A shift that crosses midnight is kept.
+    const mk = date.slice(0, 7);
+    const latest = await mutateMonth(mk, m => { m.days[date] = { in: checkIn, out: checkOut, brk: totalBreakMin }; });
+    await closeActiveSession(activeSession);
 
-    if(monthKey(targetDate) !== monthKey(currentDate)) currentDate = targetDate;
-    monthData = latestMonth;
-    activeSession = null;
-    await saveActiveSession();
+    if(mk !== monthKey(currentDate)){
+      currentDate = new Date(date + 'T00:00:00');
+      try{ await loadMonth(currentDate); }catch(e){ monthData = latest; }
+    }
     render();
     showToast('המשמרת הסתיימה ונשמרה');
     checkCapWarning();
   });
+}
+
+async function discardStaleSession(){
+  return runShiftAction(async () => {
+    if(!activeSession){ render(); return; }
+    await closeActiveSession(activeSession);
+    render();
+    showToast('המשמרת בוטלה');
+  });
+}
+
+function openStaleSessionEditor(){
+  if(!activeSession) return;
+  switchTab('shifts');
+  const closedBreaks = AttendanceCalc.sessionBreakMinutes({ breaks: (activeSession.breaks || []).filter(b => b.end) });
+  openEntryEditor(null, { date: activeSession.date, in: activeSession.checkIn, out: '', brk: closedBreaks, resolvesSession: true });
 }
 
 function lpButton(id, extraClass, label){
@@ -800,6 +860,19 @@ function buildShiftWidget(){
       <section class="shift-widget idle">
         ${lpButton('clockInBtn','','🟢 כניסה עכשיו')}
         <p class="lp-hint">החזיקו לחיצה כדי לאשר</p>
+      </section>`;
+  }
+  if(AttendanceCalc.isStaleSession(activeSession, Date.now())){
+    const since = `${activeSession.date.slice(8,10)}.${activeSession.date.slice(5,7)} ${activeSession.checkIn}`;
+    return `
+      <section class="shift-widget stale">
+        <div class="shift-status">⚠️ משמרת פתוחה מאז ${since}</div>
+        <p class="stale-text">נראה ששכחת להחתים יציאה. הזן את שעת היציאה האמיתית או בטל את המשמרת.</p>
+        <div class="shift-actions">
+          <button id="resolveStaleBtn" class="shift-btn" type="button">✏️ הזן יציאה</button>
+          ${lpButton('discardStaleBtn','secondary','🗑️ בטל משמרת')}
+        </div>
+        <p class="lp-hint">ביטול משמרת דורש לחיצה ארוכה</p>
       </section>`;
   }
   if(isOnBreak()){
@@ -826,87 +899,18 @@ function buildShiftWidget(){
 }
 
 function tickShiftTimer(){
+  if(activeSession && AttendanceCalc.isStaleSession(activeSession, Date.now()) && !document.getElementById('resolveStaleBtn')){
+    renderUnlessEditing(); // the shift just crossed the limit while the app was open
+    return;
+  }
   const el = document.getElementById('shiftElapsed');
   if(!el || !activeSession || isOnBreak()) return;
-  const start = new Date(`${activeSession.date}T${activeSession.checkIn}:00`);
-  const now = new Date();
-  let diffMin = Math.floor((now - start) / 60000);
-  const breakMin = activeSession.breaks.reduce((s,b) => s + (b.end ? (timeToMinutes(b.end) - timeToMinutes(b.start)) : 0), 0);
-  diffMin = Math.max(0, diffMin - breakMin);
-  const h = Math.floor(diffMin/60), m = diffMin % 60;
-  el.textContent = `· חלפו ${h}ש׳ ${m}ד׳`;
+  const diffMin = AttendanceCalc.netElapsedMinutes(activeSession, Date.now());
+  el.textContent = `· חלפו ${Math.floor(diffMin/60)}ש׳ ${diffMin % 60}ד׳`;
 }
 
-// ---- calculation ----
-function timeToMinutes(t){
-  const [h,m] = t.split(':').map(Number);
-  return h*60+m;
-}
-
-function dayHours(entry){
-  if(entry?.type === 'sick'){
-    const total = Math.max(0, Number(settings.sickDayHours) || 0);
-    return { total, regular:total, ot125:0, ot150:0, excessBreakMin:0, type:'sick' };
-  }
-  let rawSpan = timeToMinutes(entry.out) - timeToMinutes(entry.in);
-  if(rawSpan < 0) rawSpan = 0;
-  const brk = Number(entry.brk)||0;
-  const excessBreakMin = Math.max(0, brk - settings.freeBreakMinutes);
-  let mins = rawSpan - excessBreakMin;
-  if(mins < 0) mins = 0;
-  const total = mins/60;
-  const regular = Math.min(total, settings.regularHours);
-  let rest = Math.max(0, total - settings.regularHours);
-  const ot125 = Math.min(rest, settings.ot125Hours);
-  rest = Math.max(0, rest - settings.ot125Hours);
-  const ot150 = rest;
-  return { total, regular, ot125, ot150, excessBreakMin, type:'work' };
-}
-
-function computeMonth(monthDataArg){
-  const md = monthDataArg || monthData;
-  const dates = Object.keys(md.days).sort();
-  let cumRaw = 0;
-  let paidRegular=0, paidOt125=0, paidOt150=0, unpaid=0, rawTotal=0, excessBreakMinTotal=0, sickHours=0, sickDays=0;
-  const perDay = {};
-
-  for(const date of dates){
-    const dayEntry = md.days[date];
-    const h = dayHours(dayEntry);
-    if(dayEntry?.type === 'sick') { sickHours += h.total; sickDays++; }
-    perDay[date] = h;
-    rawTotal += h.total;
-    excessBreakMinTotal += h.excessBreakMin;
-
-    let ratio = 1;
-    if(cumRaw >= settings.monthlyCap){
-      ratio = 0;
-    } else if(cumRaw + h.total > settings.monthlyCap){
-      ratio = h.total > 0 ? (settings.monthlyCap - cumRaw) / h.total : 0;
-    }
-    cumRaw += h.total;
-
-    h.paidRegular = h.regular*ratio;
-    h.paidOt125 = h.ot125*ratio;
-    h.paidOt150 = h.ot150*ratio;
-    h.pay = h.paidRegular*settings.hourlyRate + h.paidOt125*settings.hourlyRate*1.25 + h.paidOt150*settings.hourlyRate*1.5;
-
-    paidRegular += h.paidRegular;
-    paidOt125 += h.paidOt125;
-    paidOt150 += h.paidOt150;
-    unpaid += h.total*(1-ratio);
-  }
-
-  const hoursGross = paidRegular*settings.hourlyRate + paidOt125*settings.hourlyRate*1.25 + paidOt150*settings.hourlyRate*1.5;
-  const additionAmounts = settings.additions.map(a => ({ ...a, amount: Number(a.amount)||0 }));
-  const totalAdditions = additionAmounts.reduce((s,a)=>s+a.amount,0);
-  const gross = hoursGross + totalAdditions; // additions are part of gross salary, not a tax-free top-up
-  const deductionAmounts = settings.deductions.map(dd => ({ ...dd, amount: gross*(dd.percent/100) }));
-  const totalDeductions = deductionAmounts.reduce((s,d)=>s+d.amount,0);
-  const net = gross - totalDeductions;
-
-  return { perDay, paidRegular, paidOt125, paidOt150, unpaid, rawTotal, hoursGross, gross, deductionAmounts, totalDeductions, additionAmounts, totalAdditions, net, excessBreakMinTotal, sickHours, sickDays, capExceeded: rawTotal > settings.monthlyCap };
-}
+// ---- calculation (pure logic lives in calc.js) ----
+function computeMonth(monthDataArg){ return AttendanceCalc.computeMonth(monthDataArg || monthData, settings); }
 
 async function getAllMonthsData(){
   try{
@@ -931,6 +935,26 @@ async function getAllMonthsData(){
 }
 
 // ---- rendering ----
+const SHIFT_HEADER = ['תאריך','כניסה','יציאה','הפסקה (דק\')','חריגת הפסקה (דק\')','שעות רגילות','שעות 125%','שעות 150%','סה"כ שעות','סוג יום'];
+function shiftSheetRows(md, calc){
+  const dates = Object.keys(md.days || {}).sort();
+  const rows = dates.map(date => {
+    const e = md.days[date];
+    const h = calc.perDay[date];
+    return [
+      date, e.in || '', e.out || '', e.brk || 0, Math.round(h.excessBreakMin),
+      Number(h.regular.toFixed(2)), Number(h.ot125.toFixed(2)), Number(h.ot150.toFixed(2)),
+      Number(h.total.toFixed(2)), e.type === 'sick' ? 'מחלה' : 'עבודה'
+    ];
+  });
+  const totals = [
+    'סה"כ', '', '', '', Math.round(calc.excessBreakMinTotal),
+    Number(calc.paidRegular.toFixed(2)), Number(calc.paidOt125.toFixed(2)), Number(calc.paidOt150.toFixed(2)),
+    Number(calc.rawTotal.toFixed(2)), ''
+  ];
+  return [SHIFT_HEADER, ...rows, [], totals];
+}
+
 function fmtHours(h){ return h.toLocaleString('he-IL',{minimumFractionDigits:1,maximumFractionDigits:1}); }
 function fmtMoney(n){ return '₪' + n.toLocaleString('he-IL',{minimumFractionDigits:0,maximumFractionDigits:0}); }
 function fmtMoneyDiff(n){ return `${n > 0 ? '+' : n < 0 ? '−' : ''}${fmtMoney(Math.abs(n))}`; }
@@ -971,33 +995,8 @@ async function exportMonthToExcel(calc){
     return;
   }
 
-  const shiftsHeader = ['תאריך','כניסה','יציאה','הפסקה (דק\')','חריגת הפסקה (דק\')','שעות רגילות','שעות 125%','שעות 150%','סה"כ שעות','סוג יום'];
-  const shiftsRows = dates.map(date => {
-    const e = monthData.days[date];
-    const h = calc.perDay[date];
-    return [
-      date,
-      e.in || '',
-      e.out || '',
-      e.brk || 0,
-      Math.round(h.excessBreakMin),
-      Number(h.regular.toFixed(2)),
-      Number(h.ot125.toFixed(2)),
-      Number(h.ot150.toFixed(2)),
-      Number(h.total.toFixed(2)),
-      e.type === 'sick' ? 'מחלה' : 'עבודה'
-    ];
-  });
-  const totalsRow = [
-    'סה"כ', '', '', '', Math.round(calc.excessBreakMinTotal),
-    Number(calc.paidRegular.toFixed(2)),
-    Number(calc.paidOt125.toFixed(2)),
-    Number(calc.paidOt150.toFixed(2)),
-    Number(calc.rawTotal.toFixed(2)), ''
-  ];
-
-  const shiftsSheet = XLSX.utils.aoa_to_sheet([shiftsHeader, ...shiftsRows, [], totalsRow]);
-  shiftsSheet['!cols'] = shiftsHeader.map(() => ({ wch: 15 }));
+  const shiftsSheet = XLSX.utils.aoa_to_sheet(shiftSheetRows(monthData, calc));
+  shiftsSheet['!cols'] = SHIFT_HEADER.map(() => ({ wch: 15 }));
   shiftsSheet['!views'] = [{ rightToLeft: true }];
 
   const summaryRows = [
@@ -1057,7 +1056,6 @@ async function exportAllHistoryToExcel(){
   // Sheet 1: one row per month with totals
   const monthlyHeader = ['חודש','ימי מחלה','שעות מחלה','שעות רגילות','שעות 125%','שעות 150%','סה"כ שעות בפועל','שעות לא ששולמו','ברוטו','נטו'];
   const monthlyRows = [];
-  const shiftsHeader = ['תאריך','כניסה','יציאה','הפסקה (דק\')','חריגת הפסקה (דק\')','שעות רגילות','שעות 125%','שעות 150%','סה"כ שעות'];
 
   const wb = XLSX.utils.book_new();
   wb.Workbook = wb.Workbook || {};
@@ -1087,23 +1085,9 @@ async function exportAllHistoryToExcel(){
     grandGross += calc.gross;
     grandNet += calc.net;
 
-    // build this month's own sheet, same shape as the single-month export
-    const dates = Object.keys(md.days || {}).sort();
-    const monthRows = dates.map(date => {
-      const e = md.days[date];
-      const h = calc.perDay[date];
-      return [
-        date, e.in || '', e.out || '', e.brk || 0, Math.round(h.excessBreakMin),
-        Number(h.regular.toFixed(2)), Number(h.ot125.toFixed(2)), Number(h.ot150.toFixed(2)), Number(h.total.toFixed(2)), e.type === 'sick' ? 'מחלה' : 'עבודה'
-      ];
-    });
-    const totalsRow = [
-      'סה"כ', '', '', '', Math.round(calc.excessBreakMinTotal),
-      Number(calc.paidRegular.toFixed(2)), Number(calc.paidOt125.toFixed(2)), Number(calc.paidOt150.toFixed(2)), Number(calc.rawTotal.toFixed(2)), ''
-    ];
-
-    const monthSheet = XLSX.utils.aoa_to_sheet([shiftsHeader, ...monthRows, [], totalsRow]);
-    monthSheet['!cols'] = shiftsHeader.map(() => ({ wch: 14 }));
+    // this month's own sheet, same shape as the single-month export
+    const monthSheet = XLSX.utils.aoa_to_sheet(shiftSheetRows(md, calc));
+    monthSheet['!cols'] = SHIFT_HEADER.map(() => ({ wch: 14 }));
     monthSheet['!views'] = [{ rightToLeft: true }];
 
     // Excel sheet names: max 31 chars, no \ / ? * [ ] : — and must be unique
@@ -1136,6 +1120,25 @@ async function exportAllHistoryToExcel(){
   }
 }
 
+// True while the user is typing or has the entry editor open.
+function isUserEditing(){
+  const overlay = document.getElementById('entryEditorOverlay');
+  if(overlay && !overlay.hidden) return true;
+  const a = document.activeElement;
+  return !!(a && a.closest && a.closest('#mainContent') && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName));
+}
+let renderPending = false;
+function renderUnlessEditing(){
+  if(isUserEditing()){ renderPending = true; return; }
+  renderPending = false;
+  render();
+}
+function flushPendingRender(){
+  if(renderPending && !isUserEditing()){ renderPending = false; render(); }
+}
+document.addEventListener('focusout', () => setTimeout(flushPendingRender, 250));
+const dataFingerprint = () => JSON.stringify([settings, monthData, payslipActual, activeSession]);
+
 function render(){
   const main = $('#mainContent');
   const prevListScroll = document.getElementById('entriesContainer')?.scrollTop || 0;
@@ -1158,6 +1161,7 @@ function render(){
     <section class="ledger-card">
       <div class="cap-label">
         <span>0</span>
+        <span class="cap-remaining">${calc.capExceeded ? 'חריגה מהתקרה' : `נותרו ${fmtHours(Math.max(0, settings.monthlyCap - calc.rawTotal))} ש׳`}</span>
         <span>${settings.monthlyCap} שעות (תקרה)</span>
       </div>
       <div class="punch-strip">
@@ -1220,6 +1224,7 @@ function render(){
           <label>שעת יציאה <input type="time" id="entryOut"></label>
           <label>הפסקה (דק') <input type="number" id="entryBreak" value="0" min="0" inputmode="numeric"></label>
         </div>
+        <p class="stale-note" id="staleNote" hidden>⚠️ משמרת שלא נסגרה — הזן את שעת היציאה האמיתית ושמור כדי לסגור אותה.</p>
         <p class="sick-entry-note" id="sickDayNote" hidden>${Number(settings.sickDayHours) > 0 ? `מחלה: ${fmtHours(settings.sickDayHours)} שעות בתעריף רגיל, בתשלום מהיום הראשון.` : 'כדי להזין יום מחלה, הגדירו תחילה את שעות התקן בהגדרות.'}</p>
         <button type="submit">שמור יום</button>
       </form>
@@ -1315,6 +1320,10 @@ function wireShiftWidget(){
   const startBreakBtn = document.getElementById('startBreakBtn');
   const endBreakBtn = document.getElementById('endBreakBtn');
   const outBtn = document.getElementById('clockOutBtn');
+  const resolveStaleBtn = document.getElementById('resolveStaleBtn');
+  const discardStaleBtn = document.getElementById('discardStaleBtn');
+  if(resolveStaleBtn) resolveStaleBtn.addEventListener('click', openStaleSessionEditor);
+  if(discardStaleBtn) attachLongPress(discardStaleBtn, discardStaleSession);
   if(inBtn) attachLongPress(inBtn, clockIn);
   if(startBreakBtn) attachLongPress(startBreakBtn, startBreak);
   if(endBreakBtn) attachLongPress(endBreakBtn, endBreak);
@@ -1369,10 +1378,20 @@ function closeEntryEditor(){
   const overlay = document.getElementById('entryEditorOverlay');
   if(overlay) overlay.hidden = true;
   document.getElementById('mainContent')?.classList.remove('editor-open');
+  editorResolvesSession = false;
+  flushPendingRender();
 }
 
-function openEntryEditor(date = null){
-  if(date){
+function openEntryEditor(date = null, prefill = null){
+  editorResolvesSession = !!(prefill && prefill.resolvesSession);
+  if(prefill){
+    $('#entryDate').value = prefill.date;
+    $('#entryType').value = 'work';
+    $('#entryIn').value = prefill.in;
+    $('#entryOut').value = prefill.out;
+    $('#entryBreak').value = prefill.brk;
+    updateEntryTypeUI();
+  }else if(date){
     fillFormForDate(date);
   }else{
     $('#entryDate').value = todayStr();
@@ -1382,6 +1401,7 @@ function openEntryEditor(date = null){
     $('#entryBreak').value = 0;
     updateEntryTypeUI();
   }
+  $('#staleNote').hidden = !editorResolvesSession;
   const overlay = document.getElementById('entryEditorOverlay');
   if(overlay) overlay.hidden = false;
   document.getElementById('mainContent')?.classList.add('editor-open');
@@ -1411,10 +1431,26 @@ function wireEntryInteractions(){
     btn.addEventListener('click', async (ev) => {
       ev.stopPropagation();
       const date = btn.dataset.del;
-      delete monthData.days[date];
-      await saveMonth(currentDate);
+      const mk = date.slice(0, 7);
+      const removed = monthData.days[date];
+      try{
+        await mutateMonth(mk, m => { delete m.days[date]; });
+      }catch(e){
+        console.error('delete failed', e);
+        showToast('המחיקה נכשלה. בדוק חיבור ונסה שוב.');
+        return;
+      }
       render();
-      showToast('היום נמחק');
+      showToast('היום נמחק', { action: { label: 'ביטול', onClick: async () => {
+        try{
+          await mutateMonth(mk, m => { m.days[date] = removed; });
+          render();
+          showToast('המחיקה בוטלה');
+        }catch(e){
+          console.error('undo failed', e);
+          showToast('לא ניתן היה לשחזר את היום');
+        }
+      } } });
     });
   });
 }
@@ -1424,6 +1460,7 @@ function buildList(dates, calc){
     const h = calc.perDay[date];
     const e = monthData.days[date];
     const day = date.split('-')[2];
+    const weekday = new Date(date + 'T00:00:00').toLocaleDateString('he-IL', { weekday:'short' }).replace('יום ', '');
     const isSick = e.type === 'sick';
     const dayTime = isSick
       ? `מחלה · ${fmtHours(h.total)} שעות`
@@ -1434,7 +1471,7 @@ function buildList(dates, calc){
     return `<div class="entry-row ${isSick ? 'sick-entry-row' : ''}" data-date="${date}">
       <div class="entry-row-top">
         <div class="entry-main">
-          <div class="entry-date">${day}.${String(currentDate.getMonth()+1).padStart(2,'0')}</div>
+          <div class="entry-date">${weekday} · ${day}.${String(currentDate.getMonth()+1).padStart(2,'0')}</div>
           <div class="entry-time">${dayTime}</div>
         </div>
         <div class="entry-pay mono">${fmtMoney(h.pay)}</div>
@@ -1499,23 +1536,38 @@ async function onAddEntry(ev){
   const type = $('#entryType').value || 'work';
   const inT = $('#entryIn').value;
   const outT = $('#entryOut').value;
-  const brk = Number($('#entryBreak').value)||0;
+  const brk = Number($('#entryBreak').value) || 0;
   if(!date){ showToast('נא לבחור תאריך'); return; }
-  if(type === 'work' && (!inT || !outT)){ showToast('נא למלא שעת כניסה ויציאה'); return; }
-  if(type === 'work' && timeToMinutes(outT) <= timeToMinutes(inT)){ showToast('שעת היציאה חייבת להיות אחרי הכניסה'); return; }
+  if(type === 'work'){
+    if(!inT || !outT){ showToast('נא למלא שעת כניסה ויציאה'); return; }
+    const mins = AttendanceCalc.shiftMinutes(inT, outT); // crossing midnight is allowed
+    if(mins === null){ showToast('בדוק את השעות: משמרת יכולה להיות עד 16 שעות'); return; }
+    if(brk < 0 || brk > mins){ showToast('משך ההפסקה לא הגיוני ביחס למשמרת'); return; }
+  }
   if(type === 'sick' && !(Number(settings.sickDayHours) > 0)){ showToast('הגדר קודם את שעות התקן ליום מחלה בהגדרות'); return; }
 
-  const dMonthKey = date.slice(0,7);
-  if(dMonthKey !== monthKey(currentDate)){
-    // entry belongs to a different month than currently viewed — switch to it
-    currentDate = new Date(date+'T00:00:00');
-    await loadMonth(currentDate);
+  const submitBtn = ev.submitter || document.querySelector('#entryForm button[type="submit"]');
+  if(submitBtn) submitBtn.disabled = true;
+  const entry = type === 'sick' ? { type:'sick' } : { type:'work', in:inT, out:outT, brk };
+  try{
+    await mutateMonth(date.slice(0, 7), m => { m.days[date] = entry; });
+    if(editorResolvesSession && activeSession) await closeActiveSession(activeSession);
+    editorResolvesSession = false;
+    if(date.slice(0, 7) !== monthKey(currentDate)){
+      // the entry belongs to another month than the one on screen — switch to it
+      currentDate = new Date(date + 'T00:00:00');
+      await loadMonth(currentDate);
+    }
+    render();
+    showToast('היום נשמר');
+    checkCapWarning();
+  }catch(e){
+    // the editor stays open with everything the user typed
+    console.error('save entry failed', e);
+    showToast('השמירה נכשלה. בדוק חיבור ונסה שוב.');
+  }finally{
+    if(submitBtn) submitBtn.disabled = false;
   }
-  monthData.days[date] = type === 'sick' ? { type:'sick' } : { type:'work', in:inT, out:outT, brk };
-  await saveMonth(currentDate);
-  render();
-  showToast('היום נשמר');
-  checkCapWarning();
 }
 
 async function savePayslipComparison(){
@@ -1549,11 +1601,16 @@ async function clearPayslipComparison(){
 }
 
 async function changeMonth(delta){
+  const previous = currentDate;
   currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth()+delta, 1);
   showDataLoader();
   try{
     await loadMonth(currentDate);
     render();
+  }catch(e){
+    console.error('changeMonth failed', e);
+    currentDate = previous; // never show another month's label over stale data
+    showToast('לא ניתן לטעון את החודש. בדוק חיבור.');
   }finally{
     hideDataLoader();
   }
@@ -1697,24 +1754,43 @@ $('#addAddition').addEventListener('click', () => {
   renderAdditionRows();
 });
 $('#saveSettings').addEventListener('click', async () => {
-  settings.hourlyRate = Number($('#setRate').value) || 0;
-  settings.regularHours = Number($('#setRegularHours').value) || 0;
-  settings.sickDayHours = Math.max(0, Number($('#setSickDayHours').value) || 0);
-  settings.ot125Hours = Number($('#setOt125Hours').value) || 0;
-  settings.monthlyCap = Number($('#setMonthlyCap').value) || 0;
-  settings.freeBreakMinutes = Number($('#setFreeBreak').value) || 0;
-  settings.capWarnHours = Number($('#setCapWarnHours').value) || 0;
+  const num = id => Number($(id).value);
+  const next = {
+    hourlyRate: num('#setRate'),
+    regularHours: num('#setRegularHours'),
+    sickDayHours: num('#setSickDayHours') || 0,
+    ot125Hours: num('#setOt125Hours') || 0,
+    monthlyCap: num('#setMonthlyCap'),
+    freeBreakMinutes: num('#setFreeBreak') || 0,
+    capWarnHours: num('#setCapWarnHours') || 0,
+    checkOutRepeatMinutes: num('#setCheckOutRepeatMinutes') || 0
+  };
+  const deductions = [...document.querySelectorAll('#deductionsSettings .deduction-row')].map((row,i) => ({
+    ...settings.deductions[i],
+    name: row.querySelector('[data-field="name"]').value || 'רכיב',
+    percent: Number(row.querySelector('[data-field="percent"]').value) || 0
+  }));
+  const additions = [...document.querySelectorAll('#additionsSettings .deduction-row')].map((row,i) => ({
+    ...settings.additions[i],
+    name: row.querySelector('[data-field="name"]').value || 'תוספת',
+    amount: Number(row.querySelector('[data-field="amount"]').value) || 0
+  }));
+
+  // A zero cap or rate would silently zero out the whole salary estimate — refuse it.
+  const problem =
+    !(next.hourlyRate > 0) ? 'שכר שעתי חייב להיות גדול מאפס' :
+    !(next.regularHours > 0 && next.regularHours <= 24) ? 'שעות ליום רגיל חייבות להיות בין 0 ל-24' :
+    !(next.monthlyCap > 0) ? 'תקרת השעות החודשית חייבת להיות גדולה מאפס' :
+    [next.sickDayHours, next.ot125Hours, next.freeBreakMinutes, next.capWarnHours, next.checkOutRepeatMinutes].some(v => !(v >= 0)) ? 'ערכים שליליים אינם מותרים' :
+    deductions.some(d => d.percent < 0 || d.percent > 100) || deductions.reduce((s,d) => s + d.percent, 0) > 100 ? 'אחוזי הניכויים חייבים להיות בין 0 ל-100 וסכומם עד 100' :
+    additions.some(a => a.amount < 0) ? 'סכום תוספת לא יכול להיות שלילי' : null;
+  if(problem){ showToast(problem); return; }
+
+  Object.assign(settings, next);
   settings.attendanceRemindersEnabled = $('#setAttendanceReminders').value === 'on';
   settings.checkOutReminderTime = $('#setCheckOutReminderTime').value || '16:00';
-  settings.checkOutRepeatMinutes = Math.max(0, Number($('#setCheckOutRepeatMinutes').value) || 0);
-  document.querySelectorAll('#deductionsSettings .deduction-row').forEach((row,i) => {
-    settings.deductions[i].name = row.querySelector('[data-field="name"]').value || 'רכיב';
-    settings.deductions[i].percent = Number(row.querySelector('[data-field="percent"]').value) || 0;
-  });
-  document.querySelectorAll('#additionsSettings .deduction-row').forEach((row,i) => {
-    settings.additions[i].name = row.querySelector('[data-field="name"]').value || 'תוספת';
-    settings.additions[i].amount = Number(row.querySelector('[data-field="amount"]').value) || 0;
-  });
+  settings.deductions = deductions;
+  settings.additions = additions;
   await saveSettingsToStorage();
   await refreshAttendanceReminderSchedule();
   closeSettings();
@@ -1722,8 +1798,13 @@ $('#saveSettings').addEventListener('click', async () => {
 });
 $('#resetData').addEventListener('click', async () => {
   if(!confirm('לאפס את כל נתוני הנוכחות והשכר לחודש הנוכחי? פעולה זו לא ניתנת לביטול.')) return;
-  monthData = { days:{} };
-  await saveMonth(currentDate);
+  try{
+    await mutateMonth(monthKey(currentDate), m => { m.days = {}; });
+  }catch(e){
+    console.error('reset failed', e);
+    showToast('האיפוס נכשל. בדוק חיבור ונסה שוב.');
+    return;
+  }
   render();
   showToast('הנתונים אופסו');
 });
@@ -1777,6 +1858,7 @@ function setAuthInfo(msg){
 function updateAuthModeUI(){
   $('#authSubmitBtn').textContent = authMode === 'signin' ? 'התחברות' : 'הרשמה';
   $('#authToggleMode').textContent = authMode === 'signin' ? 'אין לך חשבון? הרשמה' : 'כבר יש לך חשבון? התחברות';
+  $('#authPassword').setAttribute('autocomplete', authMode === 'signin' ? 'current-password' : 'new-password');
   setAuthError(null);
   setAuthInfo(null);
 }
@@ -1848,8 +1930,9 @@ async function startApp(session){
     hideDataLoader();
 
     try{
+      const before = dataFingerprint();
       await loadInitialData(userId);
-      render();
+      if(dataFingerprint() !== before) renderUnlessEditing();
       refreshAttendanceReminderSchedule();
     }catch(e){
       console.error('background refresh failed', e);
@@ -1873,6 +1956,10 @@ async function startApp(session){
 }
 
 function resetSignedOutState(){
+  // the cached snapshot holds pay data: don't leave it behind on a shared device
+  try{
+    Object.keys(localStorage).filter(k => k.startsWith('nc_initial:')).forEach(k => localStorage.removeItem(k));
+  }catch(e){ /* localStorage unavailable */ }
   currentUserId = null;
   appStarted = false;
   settings = null;
@@ -1889,8 +1976,9 @@ async function refreshFromCloud(){
   if(foregroundRefreshPromise) return foregroundRefreshPromise;
   foregroundRefreshPromise = (async () => {
     try{
+      const before = dataFingerprint();
       await loadInitialData(currentUserId);
-      render();
+      if(dataFingerprint() !== before) renderUnlessEditing();
     }catch(e){
       console.error('foreground refresh failed', e);
     }finally{
