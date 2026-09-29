@@ -2,7 +2,7 @@
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>נוכחות+</title>
 <link rel="preload" as="image" href="icon-192.png" fetchpriority="high">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -46,7 +46,7 @@ if ('serviceWorker' in navigator) {
 </script>
 <link rel="dns-prefetch" href="//ojzemdselyxxscbbvssm.supabase.co">
 <link rel="preconnect" href="https://ojzemdselyxxscbbvssm.supabase.co" crossorigin>
-<link rel="stylesheet" href="styles.css?v=attendance-redesign-v9">
+<link rel="stylesheet" href="styles.css?v=attendance-redesign-v11">
 </head>
 <body>
 <div class="initial-splash" id="initialSplash" aria-live="polite">
@@ -156,13 +156,13 @@ if ('serviceWorker' in navigator) {
     </label>
 
     <h3>תזכורת יציאה</h3>
-    <label>תזכורות יציאה
+    <label>סטטוס התזכורות
       <select id="setAttendanceReminders">
         <option value="on">פעילות</option>
         <option value="off">כבויות</option>
       </select>
     </label>
-    <label>תזכורת יציאה
+    <label>שעת התזכורת הראשונה
       <input type="time" id="setCheckOutReminderTime">
     </label>
     <label>תזכורת יציאה נוספת אחרי (דקות, 0 לביטול)
@@ -180,6 +180,6 @@ if ('serviceWorker' in navigator) {
 
 <script src="vendor/supabase.js"></script>
 <script src="calc.js?v=attendance-redesign-v9"></script>
-<script src="app.js?v=attendance-redesign-v9"></script>
+<script src="app.js?v=attendance-redesign-v11"></script>
 </body>
 </html>
