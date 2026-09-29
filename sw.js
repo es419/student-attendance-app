@@ -1,11 +1,11 @@
-const CACHE_NAME = 'attendance-shell-v24';
+const CACHE_NAME = 'attendance-shell-v25';
 const SUPABASE_LIB = 'https://unpkg.com/@supabase/supabase-js@2.109.0/dist/umd/supabase.js';
 
 const APP_SHELL = [
   './',
   './index.html',
-  './styles.css',
-  './app.js?v=attendance-redesign-v6',
+  './styles.css?v=attendance-redesign-v7',
+  './app.js?v=attendance-redesign-v7',
   './manifest.json',
   './icon-180.png',
   './icon-192.png',
@@ -19,7 +19,13 @@ self.addEventListener('install', (event) => {
     const cache = await caches.open(CACHE_NAME);
 
     // The local shell is required for an offline/instant repeat launch.
-    await cache.addAll(APP_SHELL);
+    // cache:'reload' skips the browser HTTP cache (GitHub Pages sends max-age),
+    // otherwise a fresh worker could precache the previous deploy's files.
+    await Promise.all(APP_SHELL.map(async (path) => {
+      const response = await fetch(path, { cache: 'reload' });
+      if(!response.ok) throw new Error('Precache failed: ' + path);
+      await cache.put(path, response);
+    }));
 
     // Warm the exact Supabase browser bundle too. A CDN failure must never block
     // installation of the app shell, so this cache fill is best-effort.
