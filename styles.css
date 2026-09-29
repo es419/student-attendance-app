@@ -1243,3 +1243,212 @@ main.shifts-active .entries-list #entriesContainer{
 
 /* remaining hours sits between the two ends of the cap label */
 .cap-remaining{flex:1;text-align:center;color:var(--ink-dim);}
+
+
+/* =====================================================================
+   Visual pass: one design language for every form control and button
+   ===================================================================== */
+
+/* money and signs: keep "-₪256" / "+₪250" in reading order inside RTL rows */
+.pay-row .mono,
+.entry-pay,
+.stat-value{direction:ltr;unicode-bidi:isolate;}
+
+/* ---------- inputs (settings, sign-in, payslip): same height, radius, alignment ---------- */
+.settings-drawer input,
+.settings-drawer select,
+#authForm input,
+.payslip-inputs input{
+  -webkit-appearance:none;
+  appearance:none;
+  display:block;
+  box-sizing:border-box;
+  width:100%;
+  height:48px;
+  min-height:48px;
+  margin:0;
+  padding:0 14px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background-color:var(--surface-2);
+  color:var(--ink);
+  font-family:inherit;
+  font-size:16px;
+  font-weight:500;
+  text-align:right;
+  outline:none;
+  transition:border-color .15s ease, box-shadow .15s ease;
+}
+.settings-drawer input:focus,
+.settings-drawer select:focus,
+#authForm input:focus,
+.payslip-inputs input:focus{
+  border-color:var(--brass);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--brass) 25%,transparent);
+}
+.settings-drawer input[type="time"],
+.settings-drawer input[type="date"]{line-height:46px;}
+.settings-drawer input[type="time"]::-webkit-date-and-time-value{
+  display:block;min-height:46px;line-height:46px;margin:0;padding:0;text-align:right;
+}
+.settings-drawer input[type="time"]::-webkit-datetime-edit{padding:0;line-height:46px;}
+.settings-drawer input[type="number"],
+.payslip-inputs input[type="number"]{-moz-appearance:textfield;}
+.settings-drawer input[type="number"]::-webkit-outer-spin-button,
+.settings-drawer input[type="number"]::-webkit-inner-spin-button,
+.payslip-inputs input[type="number"]::-webkit-outer-spin-button,
+.payslip-inputs input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+.settings-drawer select{
+  padding-left:40px;
+  text-align-last:right;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238b95a3' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:left 14px center;
+  background-size:14px 14px;
+}
+
+/* labels: identical rhythm everywhere */
+.settings-drawer label,
+#authForm label,
+.payslip-inputs label{
+  display:flex;flex-direction:column;gap:6px;
+  font-size:12.5px;font-weight:600;color:var(--ink-dim);
+  margin:0 0 14px;
+}
+.payslip-inputs{gap:12px;}
+.payslip-inputs label{margin:0;}
+
+/* ---------- buttons that had no styling at all ---------- */
+#telegramConnectBtn,#telegramDisconnectBtn,#pushToggleBtn,
+#addDeduction,#addAddition,#telegramCopyBtn{
+  display:block;
+  box-sizing:border-box;
+  width:100%;
+  height:46px;
+  margin:0 0 12px;
+  padding:0 14px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:var(--surface-2);
+  color:var(--ink);
+  font-family:inherit;
+  font-size:14px;
+  font-weight:600;
+  cursor:pointer;
+}
+#addDeduction,#addAddition{border-style:dashed;color:var(--ink-dim);font-weight:500;margin-bottom:6px;}
+#telegramDisconnectBtn{color:var(--rust);}
+#telegramCopyBtn{width:auto;height:40px;margin:0;flex:0 0 auto;padding:0 16px;}
+#telegramConnectBtn[hidden],#telegramDisconnectBtn[hidden],#pushToggleBtn[hidden]{display:none!important;}
+#saveSettings{height:50px;border-radius:12px;font-size:15px;margin-top:6px;}
+#resetData{height:46px;border-radius:12px;font-size:13px;margin-top:14px;}
+.telegram-command-row{display:flex;align-items:center;gap:8px;margin-bottom:12px;}
+.telegram-command-row code{
+  flex:1;min-width:0;box-sizing:border-box;height:40px;
+  display:flex;align-items:center;padding:0 12px;
+  border:1px solid var(--border);border-radius:12px;background:var(--surface-2);
+  color:var(--ink);font-size:14px;overflow:hidden;
+}
+
+/* ---------- appearance block ---------- */
+.theme-mode-btn{height:44px;padding:0 8px;border-radius:12px;}
+.accent-swatches{justify-content:center;gap:18px;margin:6px 0 4px;}
+
+/* ---------- headings + notes ---------- */
+.settings-drawer h3{
+  font-size:13px;color:var(--ink-dim);
+  margin:24px 0 12px;padding-top:18px;
+  border-top:1px solid var(--border);
+}
+.settings-head + h3{margin-top:6px;padding-top:0;border-top:0;}
+.settings-note{font-size:11.5px;margin:2px 0 14px;}
+.push-status{font-size:12.5px;margin:0 0 10px;}
+
+/* ---------- deduction / addition rows: name | value | remove, all one height ---------- */
+.deduction-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 92px 46px;
+  gap:8px;
+  align-items:center;
+  margin-bottom:8px;
+}
+.settings-drawer .deduction-row input{width:100%;}
+.deduction-row button{
+  box-sizing:border-box;
+  width:46px;height:48px;padding:0;
+  border:1px solid var(--border);border-radius:12px;
+  background:var(--surface-2);color:var(--ink-faint);
+  font-size:15px;cursor:pointer;
+}
+
+/* ---------- sign-in card ---------- */
+#authForm{display:flex;flex-direction:column;}
+#authSubmitBtn{height:50px;border-radius:12px;font-size:15px;margin-top:4px;}
+
+/* breathing room */
+.accent-swatches{margin-bottom:22px;}
+#resetData{margin-bottom:14px;}
+
+/* emails/passwords are typed left-to-right even in an RTL form */
+#authEmail,#authPassword{direction:ltr;text-align:right;}
+/* desktop pickers: a little air between the value and the native icon */
+.entry-editor #entryForm input::-webkit-calendar-picker-indicator,
+.settings-drawer input::-webkit-calendar-picker-indicator{margin-inline-end:8px;}
+
+
+/* =====================================================================
+   Native-feeling scrolling
+   ===================================================================== */
+
+/* No double-tap zoom, no grey tap flash, no long-press callout, no page bounce */
+html,body{touch-action:manipulation;overscroll-behavior:none;}
+*{-webkit-tap-highlight-color:transparent;}
+body{-webkit-touch-callout:none;}
+html{scroll-behavior:auto;}
+
+/* Every scroller: momentum, contained (no chaining into the page), no scrollbar */
+.today-body,
+main.shifts-active .entries-list #entriesContainer,
+.settings-drawer,
+.entry-editor,
+.auth-screen,
+main{
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior-y:contain;
+  scrollbar-width:none;
+}
+.today-body::-webkit-scrollbar,
+.settings-drawer::-webkit-scrollbar,
+.entry-editor::-webkit-scrollbar,
+.auth-screen::-webkit-scrollbar,
+main::-webkit-scrollbar{display:none;width:0;height:0;}
+
+/* iOS only rubber-bands a scroller that actually overflows. Give the two main lists a
+   1-2px overflow so they always give that elastic feel, even with a short list
+   (like UIScrollView.alwaysBounceVertical). It is invisible and not clickable. */
+.today-body,
+main.shifts-active .entries-list #entriesContainer{position:relative;}
+.today-body::after,
+main.shifts-active .entries-list #entriesContainer::after{
+  content:"";
+  position:absolute;
+  left:0;
+  top:calc(100% + 1px);
+  width:1px;height:1px;
+  pointer-events:none;
+}
+
+/* Backdrops never scroll the page behind them; only the sheet/dialog itself scrolls */
+.drawer-overlay,
+.entry-editor-overlay{touch-action:none;overscroll-behavior:none;}
+.settings-drawer,
+.entry-editor{touch-action:pan-y;}
+
+/* Keyboard open: shrink the app to the visible area so nothing hides behind it */
+html.keyboard-open .app{
+  top:var(--app-top,0px);
+  bottom:auto;
+  height:var(--app-h,100%);
+}
+html.keyboard-open .entry-editor{max-height:calc(var(--app-h, 100dvh) - 36px);}
+html.keyboard-open .settings-drawer{max-height:calc(var(--app-h, 100dvh) - 12px);}

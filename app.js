@@ -1139,9 +1139,21 @@ function flushPendingRender(){
 document.addEventListener('focusout', () => setTimeout(flushPendingRender, 250));
 const dataFingerprint = () => JSON.stringify([settings, monthData, payslipActual, activeSession]);
 
+// Each tab remembers where it was scrolled to, like a native tab bar does.
+const tabScroll = { today: 0, shifts: 0 };
+const tabScroller = tab => document.querySelector(tab === 'today' ? '.today-body' : '#entriesContainer');
+function saveTabScroll(tab = activeTab){
+  const el = tabScroller(tab);
+  if(el && el.offsetParent !== null) tabScroll[tab] = el.scrollTop; // hidden panels report 0
+}
+function restoreTabScroll(tab = activeTab){
+  const el = tabScroller(tab);
+  if(el) el.scrollTop = tabScroll[tab] || 0;
+}
+
 function render(){
   const main = $('#mainContent');
-  const prevListScroll = document.getElementById('entriesContainer')?.scrollTop || 0;
+  saveTabScroll();
   main.classList.remove('editor-open');
   const calc = computeMonth();
   const capPct = Math.min(100, (calc.rawTotal / settings.monthlyCap) * 100);
@@ -1279,17 +1291,14 @@ function render(){
   main.classList.toggle('shifts-active', activeTab === 'shifts');
   main.classList.toggle('today-active', activeTab === 'today');
   document.getElementById('payslipDetails')?.addEventListener('toggle', ev => { payslipOpen = ev.target.open; });
-  if(prevListScroll){
-    const list = document.getElementById('entriesContainer');
-    if(list) list.scrollTop = prevListScroll;
-  }
+  restoreTabScroll();
 }
 
 function switchTab(tab){
   if(tab !== 'today' && tab !== 'shifts') return;
+  saveTabScroll(); // remember the tab we are leaving
   activeTab = tab;
   const main = $('#mainContent');
-  main.scrollTop = 0;
   main.classList.toggle('shifts-active', tab === 'shifts');
   main.classList.toggle('today-active', tab === 'today');
   document.querySelectorAll('[data-tab]').forEach(btn => {
@@ -1300,6 +1309,7 @@ function switchTab(tab){
   document.querySelectorAll('[data-panel]').forEach(panel => {
     panel.hidden = panel.dataset.panel !== tab;
   });
+  restoreTabScroll(tab);
 }
 
 function updateEntriesView(calc = computeMonth()){
@@ -1808,6 +1818,27 @@ $('#resetData').addEventListener('click', async () => {
   render();
   showToast('הנתונים אופסו');
 });
+
+// ---- on-screen keyboard ----
+// iOS keeps the layout viewport full height when the keyboard opens, so fixed UI ends
+// up hidden behind it. Follow the visual viewport instead, like a native screen does.
+if(window.visualViewport){
+  const vv = window.visualViewport;
+  const root = document.documentElement;
+  const syncViewport = () => {
+    if(window.innerHeight - vv.height > 120){ // keyboard is open
+      root.style.setProperty('--app-h', `${vv.height}px`);
+      root.style.setProperty('--app-top', `${vv.offsetTop}px`);
+      root.classList.add('keyboard-open');
+    }else{
+      root.style.removeProperty('--app-h');
+      root.style.removeProperty('--app-top');
+      root.classList.remove('keyboard-open');
+    }
+  };
+  vv.addEventListener('resize', syncViewport);
+  vv.addEventListener('scroll', syncViewport);
+}
 
 // ---- auth + startup ----
 let authMode = 'signin'; // 'signin' | 'signup'
