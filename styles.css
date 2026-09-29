@@ -1151,3 +1151,54 @@ main.today-active .sick-note{margin-bottom:10px;}
 .payslip-card > .payslip-actions{margin-bottom:16px;}
 .payslip-card > .payslip-inputs{margin-top:8px;}
 .payslip-card > summary h2{margin:0;}
+
+
+/* ---------- full-screen shell: no leftover strip at the bottom ----------
+   .app used height:100dvh, which on iOS standalone can stop short of the real
+   screen bottom (the strip below it showed the plain page background, and
+   fixed overlays inside .app got clipped to it). Pin it to the whole viewport. */
+.app{
+  position:fixed;
+  top:0;right:0;bottom:0;left:0;
+  height:auto;
+  min-height:0;
+  margin:0 auto;
+}
+/* no constant padding under the content: the scrolling areas own the
+   safe-area spacing, so lists run edge-to-edge and the last row can still
+   scroll clear of the home indicator */
+main.today-active,
+main.shifts-active{padding-bottom:0;}
+.today-body,
+main.shifts-active .entries-list #entriesContainer{
+  padding-bottom:calc(8px + env(safe-area-inset-bottom, 0px));
+}
+.settings-drawer{max-height:min(88%,760px);}
+
+/* ---------- entry editor: vertically centre date/time values (iOS Safari) ---------- */
+.entry-editor #entryForm input[type="date"],
+.entry-editor #entryForm input[type="time"]{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  padding-top:0;
+  padding-bottom:0;
+  line-height:1.2;
+}
+.entry-editor #entryForm input[type="date"]::-webkit-date-and-time-value,
+.entry-editor #entryForm input[type="time"]::-webkit-date-and-time-value{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  min-height:1.5em;
+  margin:0;
+  padding:0;
+  text-align:right;
+}
+.entry-editor #entryForm input[type="date"]::-webkit-datetime-edit,
+.entry-editor #entryForm input[type="time"]::-webkit-datetime-edit{
+  display:flex;
+  align-items:center;
+  padding:0;
+  line-height:1.2;
+}
