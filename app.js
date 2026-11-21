@@ -1176,7 +1176,6 @@ function render(){
     <div class="tab-panel" data-panel="today" ${activeTab!=='today' ? 'hidden' : ''}>
     ${buildShiftWidget()}
     <div class="today-body">
-    ${buildPlanner()}
     <section class="ledger-card">
       <div class="cap-label">
         <span>0</span>
@@ -1191,6 +1190,7 @@ function render(){
         <div class="punch-holes"></div>
       </div>
 
+      ${buildPlanner()}
       <div class="ledger-grid">
         <div class="ledger-stat regular"><span class="stat-label">רגילות</span><span class="stat-value mono">${fmtHours(calc.paidRegular)}</span></div>
         <div class="ledger-stat ot125"><span class="stat-label">125%</span><span class="stat-value mono">${fmtHours(calc.paidOt125)}</span></div>
