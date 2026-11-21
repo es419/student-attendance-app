@@ -715,6 +715,7 @@ async function syncActiveSessionFromCloud(){
 async function runShiftAction(action){
   if(shiftActionBusy) return;
   shiftActionBusy = true;
+  updateShiftBusy();
   // Capture the moment of the press now: the network round-trips below must never
   // move the recorded time.
   const stamp = { time: nowTimeStr(), date: todayStr(), at: Date.now() };
@@ -729,6 +730,7 @@ async function runShiftAction(action){
     render();
   }finally{
     shiftActionBusy = false;
+    updateShiftBusy();
   }
 }
 
@@ -859,6 +861,7 @@ function buildShiftWidget(){
     return `
       <section class="shift-widget idle">
         ${lpButton('clockInBtn','','🟢 כניסה עכשיו')}
+        ${plannedTodayHint()}
         <p class="lp-hint">החזיקו לחיצה כדי לאשר</p>
       </section>`;
   }
@@ -899,6 +902,8 @@ function buildShiftWidget(){
 }
 
 function tickShiftTimer(){
+  const summary = document.getElementById('planSummary');
+  if(summary && !plannerOpen && !plannerSaving) summary.innerHTML = planSummary();
   if(activeSession && AttendanceCalc.isStaleSession(activeSession, Date.now()) && !document.getElementById('resolveStaleBtn')){
     renderUnlessEditing(); // the shift just crossed the limit while the app was open
     return;
@@ -1122,6 +1127,7 @@ async function exportAllHistoryToExcel(){
 
 // True while the user is typing or has the entry editor open.
 function isUserEditing(){
+  if(plannerOpen || plannerSaving) return true;
   const overlay = document.getElementById('entryEditorOverlay');
   if(overlay && !overlay.hidden) return true;
   const a = document.activeElement;
@@ -1170,6 +1176,7 @@ function render(){
     <div class="tab-panel" data-panel="today" ${activeTab!=='today' ? 'hidden' : ''}>
     ${buildShiftWidget()}
     <div class="today-body">
+    ${buildPlanner()}
     <section class="ledger-card">
       <div class="cap-label">
         <span>0</span>
@@ -1287,6 +1294,8 @@ function render(){
   if(exportAllBtn) exportAllBtn.addEventListener('click', () => exportAllHistoryToExcel());
   wireEntryInteractions();
   wireShiftWidget();
+  wirePlanner();
+  updateShiftBusy();
   tickShiftTimer();
   main.classList.toggle('shifts-active', activeTab === 'shifts');
   main.classList.toggle('today-active', activeTab === 'today');
@@ -1295,6 +1304,7 @@ function render(){
 }
 
 function switchTab(tab){
+  if((plannerOpen || plannerSaving) && tab !== activeTab){showToast('שמור או בטל את התכנון לפני מעבר למסך אחר');return;}
   if(tab !== 'today' && tab !== 'shifts') return;
   saveTabScroll(); // remember the tab we are leaving
   activeTab = tab;
@@ -1325,6 +1335,16 @@ function updateEntriesView(calc = computeMonth()){
   wireEntryInteractions();
 }
 
+function updateShiftBusy(){
+  const widget=document.querySelector('.shift-widget');
+  if(!widget) return;
+  widget.setAttribute('aria-busy', String(shiftActionBusy));
+  widget.querySelectorAll('button').forEach(button=>button.disabled=shiftActionBusy);
+  let status=widget.querySelector('.shift-save-status');
+  if(!status){status=document.createElement('p');status.className='shift-save-status lp-hint';status.setAttribute('role','status');widget.append(status);}
+  status.textContent=shiftActionBusy?'שומר את הפעולה…':'';
+}
+
 function wireShiftWidget(){
   const inBtn = document.getElementById('clockInBtn');
   const startBreakBtn = document.getElementById('startBreakBtn');
@@ -1345,6 +1365,8 @@ function attachLongPress(el, callback, duration=650){
   const fill = el.querySelector('.lp-fill');
 
   function start(ev){
+    if(el.disabled || shiftActionBusy || (ev.button !== undefined && ev.button !== 0)) return;
+    cancel();
     ev.preventDefault();
     el.classList.add('pressing');
     if(fill){
@@ -1375,6 +1397,8 @@ function attachLongPress(el, callback, duration=650){
   el.addEventListener('pointerup', cancel);
   el.addEventListener('pointerleave', cancel);
   el.addEventListener('pointercancel', cancel);
+  // Keyboard and assistive activation have no pointer hold gesture.
+  el.addEventListener('click', ev => { if(ev.detail === 0 && !el.disabled && !shiftActionBusy) callback(); });
   el.addEventListener('contextmenu', ev => ev.preventDefault());
 }
 

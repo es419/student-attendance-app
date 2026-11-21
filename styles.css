@@ -1452,3 +1452,30 @@ html.keyboard-open .app{
 }
 html.keyboard-open .entry-editor{max-height:calc(var(--app-h, 100dvh) - 36px);}
 html.keyboard-open .settings-drawer{max-height:calc(var(--app-h, 100dvh) - 12px);}
+
+/* Monthly planning: separate forecasts from confirmed attendance. */
+.plan-card { margin-bottom:16px; font-size:1rem; }
+.plan-heading { display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;justify-content:space-between; }
+.plan-heading h2 { margin:0;font-size:1.15rem; }
+.plan-heading>span,.plan-note { color:var(--ink-dim);font-size:.875rem;line-height:1.6; }
+.plan-total { display:flex;align-items:baseline;gap:12px;margin-top:16px;flex-wrap:wrap; }
+.plan-total strong { font-size:2.25rem;font-variant-numeric:tabular-nums; }
+.plan-total span { font-size:.875rem; }
+.plan-status { font-weight:650; }
+.plan-meter { display:flex;height:10px;border-radius:8px;background:var(--surface-2);overflow:hidden; }
+.plan-meter span { background:var(--teal); }
+.plan-meter .planned { background:var(--brass); }
+.plan-alert { border-inline-start:3px solid var(--amber);padding-inline-start:10px;line-height:1.6; }
+.plan-card summary { cursor:pointer;min-height:44px;padding:12px 0;font-weight:600; }
+.plan-card input { width:100%;min-width:0;min-height:44px;background:var(--surface-2);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:8px;font-size:1rem; }
+.plan-target { display:grid;grid-template-columns:1fr 100px;align-items:center;gap:12px;margin:12px 0; }
+.plan-week { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:16px 0; }
+.plan-week label { display:grid;gap:6px;font-size:.875rem; }
+.plan-dates { display:grid;grid-template-columns:1fr 1fr;gap:10px;max-height:300px;overflow:auto; }
+.plan-date-row { display:grid;gap:4px;font-size:.875rem; }
+.plan-actions { display:flex;gap:12px;margin-top:16px; }
+.plan-actions button { min-height:44px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--ink);padding:10px 16px; }
+.plan-actions button[type=submit] { background:var(--brass-bright);color:#18202b;font-weight:700; }
+.shift-save-status:empty { display:none; }
+.shift-widget[aria-busy=true] button { opacity:.65; }
+@media(max-width:360px){ .plan-week{grid-template-columns:repeat(3,minmax(0,1fr));} }

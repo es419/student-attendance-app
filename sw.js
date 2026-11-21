@@ -1,10 +1,12 @@
-const CACHE_NAME = 'attendance-shell-v29';
+const CACHE_NAME = 'attendance-shell-v31';
 const APP_SHELL = [
   './',
   './index.html',
-  './styles.css?v=attendance-redesign-v11',
+  './styles.css?v=attendance-planner-v12',
   './calc.js?v=attendance-redesign-v9',
-  './app.js?v=attendance-redesign-v11',
+  './app.js?v=attendance-planner-v12',
+  './planner.js?v=1',
+  './planner-ui.js?v=1',
   './vendor/supabase.js',
   './manifest.json',
   './icon-180.png',
@@ -67,11 +69,13 @@ self.addEventListener('fetch', (event) => {
 });
 
 async function navigationCacheFirst(refreshPromise){
-  // Prefer the latest app shell whenever online; use cache only if the network is unavailable.
-  const fresh = await refreshPromise;
-  if(fresh) return fresh;
+  // A slow connection must not delay repeat launches. The fetch handler keeps
+  // the refresh alive with waitUntil so the next launch receives the update.
   const cache = await caches.open(CACHE_NAME);
-  return (await cache.match('./index.html')) || Response.error();
+  const cached = await cache.match('./index.html');
+  if(cached) return cached;
+  const fresh = await refreshPromise;
+  return fresh && fresh.ok ? fresh : Response.error();
 }
 
 async function refreshNavigation(request){
