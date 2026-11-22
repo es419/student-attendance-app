@@ -883,6 +883,7 @@ function buildShiftWidget(){
     return `
       <section class="shift-widget on-break">
         <div class="shift-status">☕ בהפסקה מהשעה ${b.start}</div>
+        <p id="departureHint" class="departure-hint" aria-live="off">${departureHint()}</p>
         <div class="shift-actions">
           ${lpButton('endBreakBtn','','🟢 חזרה מהפסקה')}
           ${lpButton('clockOutBtn','secondary','🔴 סיום משמרת')}
@@ -893,6 +894,7 @@ function buildShiftWidget(){
   return `
     <section class="shift-widget active">
       <div class="shift-status">🟠 במשמרת מהשעה ${activeSession.checkIn} <span id="shiftElapsed" class="mono"></span></div>
+      <p id="departureHint" class="departure-hint" aria-live="off">${departureHint()}</p>
       <div class="shift-actions">
         ${lpButton('startBreakBtn','','☕ יציאה להפסקה')}
         ${lpButton('clockOutBtn','secondary','🔴 סיום משמרת')}
@@ -908,6 +910,8 @@ function tickShiftTimer(){
     renderUnlessEditing(); // the shift just crossed the limit while the app was open
     return;
   }
+  const departureEl = document.getElementById('departureHint');
+  if(departureEl) departureEl.textContent = departureHint();
   const el = document.getElementById('shiftElapsed');
   if(!el || !activeSession || isOnBreak()) return;
   const diffMin = AttendanceCalc.netElapsedMinutes(activeSession, Date.now());

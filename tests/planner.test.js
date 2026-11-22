@@ -46,3 +46,35 @@ test('forecast leaves inputs untouched and reports excess separately',()=>{
  const before=JSON.stringify([p,days]);const f=forecast(p,days);
  assert.equal(f.gap,0);assert.equal(f.over,58);assert.equal(JSON.stringify([p,days]),before);
 });
+
+test('departure uses weekly plan, then dated override, with 8h fallback for no shift',()=>{
+ const session={date:'2026-11-22',checkIn:'08:12',breaks:[]};
+ const p={weekly:[6,0,0,0,0,0,0]};
+ const due=P.departure(p,session,40,now);
+ assert.equal(due.target,6);assert.equal(due.at.getHours(),14);assert.equal(due.at.getMinutes(),12);
+ assert.equal(P.departure({...p,overrides:{'2026-11-22':4}},session,40,now).target,4);
+ for(const plan of [null,{weekly:[0]},{...p,overrides:{'2026-11-22':0}}]){
+  const d=P.departure(plan,session,40,now);assert.equal(d.target,8);assert.equal(d.fallback,true);
+ }
+});
+test('departure only adds breaks above the paid allowance, including an open break',()=>{
+ const s={date:'2026-11-22',checkIn:'08:00',breaks:[{start:'10:00',end:'10:30'}]};
+ assert.equal(P.departure(null,s,40,now).at.getHours(),16);
+ s.breaks.push({start:'11:30',end:null});
+ const d=P.departure(null,s,40,now);
+ assert.equal(d.at.getHours(),16);assert.equal(d.at.getMinutes(),20);assert.equal(d.onBreak,true);
+});
+test('departure handles overnight shifts, completion and forgotten shifts',()=>{
+ const s={date:'2026-11-21',checkIn:'22:00',breaks:[]};
+ const d=P.departure(null,s,40,new Date(2026,10,22,2));
+ assert.equal(d.at.getDate(),22);assert.equal(d.at.getHours(),6);assert.equal(d.reached,false);
+ assert.equal(P.departure(null,s,40,new Date(2026,10,22,6)).reached,true);
+ assert.equal(P.departure(null,s,40,new Date(2026,10,22,15)),null);
+ assert.equal(P.departure(null,null,40,now),null);
+});
+test('forecast counts exactly 28, 29, 30 or 31 days for the selected month',()=>{
+ const p={weekly:[1,1,1,1,1,1,1]};
+ for(const [year,month,count] of [[2027,1,28],[2028,1,29],[2026,3,30],[2026,0,31]]){
+  assert.equal(P.forecast(p,new Date(year,month,1),{},null,new Date(2025,0,1)).planned,count);
+ }
+});

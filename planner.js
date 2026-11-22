@@ -17,6 +17,21 @@
     const d = key(date);
     return Object.hasOwn(p.overrides,d) ? p.overrides[d] : p.weekly[date.getDay()];
   }
+  // Same paid-break allowance as dayHours; plans are credited hours, not gross presence.
+  function departure(plan, session, freeBreakMinutes = 0, now = new Date()){
+    if(!session) return null;
+    const start = new Date(`${session.date}T${session.checkIn}:00`);
+    const elapsed = (now.getTime()-start.getTime())/60000;
+    if(!Number.isFinite(elapsed) || elapsed<0 || elapsed>960) return null;
+    const planned = scheduled(plan,start);
+    const target = planned>0 ? planned : 8;
+    const minute = t => { const [h,m]=t.split(':').map(Number); return h*60+m; };
+    const nowClock = `${now.getHours()}:${now.getMinutes()}`;
+    const breaks=(session.breaks||[]).reduce((sum,b)=>sum+((minute(b.end||nowClock)-minute(b.start)+1440)%1440),0);
+    const requiredMinutes=Math.ceil(target*60+Math.max(0,breaks-Math.max(0,Number(freeBreakMinutes)||0)));
+    return {target, fallback:planned<=0, at:new Date(start.getTime()+requiredMinutes*60000), reached:elapsed>=requiredMinutes,
+      onBreak:(session.breaks||[]).some(b=>!b.end), exceedsLimit:requiredMinutes>960};
+  }
   function forecast(plan, selected, perDay, active, now = new Date(), freeBreakMinutes = 0){
     const p = normalize(plan), today = key(now), rows = [];
     const year=selected.getFullYear(), month=selected.getMonth();
@@ -49,5 +64,5 @@
     const editable=rows.filter(r=>r.status==='planned').length;
     return {actual,planned,activeEstimate,projected,gap,over:Math.max(0,projected-p.target),perShift:editable ? gap/editable : null,editable,missed,unresolved,rows,target:p.target};
   }
-  return {normalize,scheduled,forecast,key};
+  return {normalize,scheduled,forecast,departure,key};
 });

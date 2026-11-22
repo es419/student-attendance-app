@@ -1,12 +1,12 @@
-const CACHE_NAME = 'attendance-shell-v32';
+const CACHE_NAME = 'attendance-shell-v33';
 const APP_SHELL = [
   './',
   './index.html',
-  './styles.css?v=attendance-planner-v13',
+  './styles.css?v=attendance-planner-v14',
   './calc.js?v=attendance-redesign-v9',
-  './app.js?v=attendance-planner-v13',
-  './planner.js?v=1',
-  './planner-ui.js?v=2',
+  './app.js?v=attendance-planner-v14',
+  './planner.js?v=2',
+  './planner-ui.js?v=3',
   './vendor/supabase.js',
   './manifest.json',
   './icon-180.png',

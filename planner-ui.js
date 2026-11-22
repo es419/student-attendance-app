@@ -71,3 +71,14 @@ function plannedTodayHint(){
   const h=AttendancePlanner.scheduled(settings.workPlan,new Date());
   return `<p class="lp-hint">${h?`בתכנון להיום: ${fmtHours(h)} שעות`:'היום לא מתוכננת משמרת — אפשר להיכנס כרגיל'}</p>`;
 }
+
+function departureHint(){
+  const result=AttendancePlanner.departure(settings.workPlan,activeSession,settings.freeBreakMinutes);
+  if(!result) return '';
+  const target=`${fmtHours(result.target)} שעות${result.fallback?' (ברירת מחדל)':''}`;
+  if(result.exceedsLimit) return 'השלמת היעד תחרוג ממגבלת משמרת של 16 שעות';
+  if(result.reached) return `השלמת ${target} במשמרת הזו`;
+  const clock=`${String(result.at.getHours()).padStart(2,'0')}:${String(result.at.getMinutes()).padStart(2,'0')}`;
+  const tomorrow=AttendancePlanner.key(result.at)!==todayStr() ? ` ב־${result.at.getDate()}.${result.at.getMonth()+1}` : '';
+  return `להשלמת ${target}: יציאה ב־${clock}${tomorrow}${result.onBreak?' · אם תחזור מההפסקה עכשיו':''}`;
+}

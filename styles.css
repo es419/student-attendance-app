@@ -1475,3 +1475,5 @@ html.keyboard-open .settings-drawer{max-height:calc(var(--app-h, 100dvh) - 12px)
 .shift-save-status:empty { display:none; }
 .shift-widget[aria-busy=true] button { opacity:.65; }
 @media(max-width:360px){ .plan-week{grid-template-columns:repeat(3,minmax(0,1fr));} }
+
+.departure-hint { margin:6px 0 12px; font-size:.875rem; line-height:1.5; color:var(--ink-dim); text-align:center; }
