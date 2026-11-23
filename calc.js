@@ -104,6 +104,18 @@
     };
   }
 
+  // Backdated quick entry is deliberately limited to the same local calendar day.
+  function earlierEntryError(date, time, nowMs) {
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return 'נא להזין שעה תקינה';
+    const now = new Date(nowMs);
+    const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    if(date !== today) return 'התאריך השתנה. פתח מחדש את הזנת השעה';
+    const elapsed = nowMs-new Date(`${date}T${time}:00`).getTime();
+    if(elapsed<0) return 'שעת הכניסה לא יכולה להיות בעתיד';
+    if(elapsed>MAX_SHIFT_MINUTES*60000) return 'עברו יותר מ־16 שעות. יש להזין את המשמרת ידנית';
+    return null;
+  }
+
   // ---- running shift helpers ----
   function sessionStartMs(session) {
     return new Date(`${session.date}T${session.checkIn}:00`).getTime();
@@ -129,7 +141,7 @@
   }
 
   return {
-    MAX_SHIFT_MINUTES, timeToMinutes, minutesBetween, shiftMinutes, dayHours, computeMonth,
+    earlierEntryError, MAX_SHIFT_MINUTES, timeToMinutes, minutesBetween, shiftMinutes, dayHours, computeMonth,
     isStaleSession, sessionBreakMinutes, netElapsedMinutes
   };
 });

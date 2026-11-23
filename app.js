@@ -696,6 +696,7 @@ function isOnBreak(){
 }
 
 let shiftActionBusy = false;
+let earlierEntryDraft = null;
 let editorResolvesSession = false; // the entry editor is being used to close a forgotten shift
 
 async function syncActiveSessionFromCloud(){
@@ -745,19 +746,27 @@ async function closeActiveSession(session){
   return saveActiveSession();
 }
 
-async function clockIn(){
+async function clockIn(earlier = null){
   return runShiftAction(async (stamp) => {
     if(activeSession){
+      earlierEntryDraft = null;
       render();
       showToast('כבר קיימת משמרת פעילה');
       return;
     }
-    activeSession = { date: stamp.date, checkIn: stamp.time, breaks: [] };
+    if(earlier){
+      const error = AttendanceCalc.earlierEntryError(earlier.date, earlier.time, stamp.at);
+      if(error){showToast(error);return;}
+      const saved = await kvGetStrict(`attendance:${earlier.date.slice(0,7)}`);
+      if(saved?.days?.[earlier.date]){showToast('כבר קיימת משמרת בתאריך הזה. אפשר לערוך אותה במסך משמרות');return;}
+    }
+    activeSession = { date: earlier ? earlier.date : stamp.date, checkIn: earlier ? earlier.time : stamp.time, breaks: [] };
     if(!(await saveActiveSession())){ activeSession = null; render(); return; }
     try{
       await cancelAttendanceReminderMessages([ATTENDANCE_REMINDER_MESSAGES.checkIn]);
       await scheduleCheckOutReminders();
     }catch(e){ console.error('reminders failed', e); } // reminders are best-effort
+    earlierEntryDraft = null;
     render();
     showToast('המשמרת התחילה — בהצלחה!');
   });
@@ -861,6 +870,12 @@ function buildShiftWidget(){
     return `
       <section class="shift-widget idle">
         ${lpButton('clockInBtn','','🟢 כניסה עכשיו')}
+        <button type="button" id="earlierEntryToggle" class="earlier-link" aria-expanded="${!!earlierEntryDraft}" aria-controls="earlierEntryForm">הגעתי קודם</button>
+        <form id="earlierEntryForm" class="earlier-entry" ${earlierEntryDraft ? '' : 'hidden'}>
+          <label for="earlierEntryTime">היום בשעה</label>
+          <input type="time" id="earlierEntryTime" required value="${earlierEntryDraft?.time || ''}">
+          <button type="submit">אישור</button><button type="button" id="earlierEntryCancel">ביטול</button>
+        </form>
         ${plannedTodayHint()}
         <p class="lp-hint">החזיקו לחיצה כדי לאשר</p>
       </section>`;
@@ -1131,6 +1146,7 @@ async function exportAllHistoryToExcel(){
 
 // True while the user is typing or has the entry editor open.
 function isUserEditing(){
+  if(earlierEntryDraft) return true;
   if(plannerOpen || plannerSaving) return true;
   const overlay = document.getElementById('entryEditorOverlay');
   if(overlay && !overlay.hidden) return true;
@@ -1343,13 +1359,35 @@ function updateShiftBusy(){
   const widget=document.querySelector('.shift-widget');
   if(!widget) return;
   widget.setAttribute('aria-busy', String(shiftActionBusy));
-  widget.querySelectorAll('button').forEach(button=>button.disabled=shiftActionBusy);
+  widget.querySelectorAll('button,input').forEach(button=>button.disabled=shiftActionBusy);
   let status=widget.querySelector('.shift-save-status');
   if(!status){status=document.createElement('p');status.className='shift-save-status lp-hint';status.setAttribute('role','status');widget.append(status);}
   status.textContent=shiftActionBusy?'שומר את הפעולה…':'';
 }
 
 function wireShiftWidget(){
+  const earlierToggle = document.getElementById('earlierEntryToggle');
+  if(earlierToggle){
+    const form = document.getElementById('earlierEntryForm');
+    const input = document.getElementById('earlierEntryTime');
+    function closeEarlier(){
+      earlierEntryDraft=null;form.hidden=true;earlierToggle.setAttribute('aria-expanded','false');earlierToggle.focus();flushPendingRender();
+    }
+    earlierToggle.addEventListener('click',()=>{
+      if(earlierEntryDraft){closeEarlier();return;}
+      earlierEntryDraft={date:todayStr(),time:''};
+      input.value='';form.hidden=false;earlierToggle.setAttribute('aria-expanded','true');input.focus();
+    });
+    input.addEventListener('input',()=>{if(earlierEntryDraft) earlierEntryDraft.time=input.value;});
+    document.getElementById('earlierEntryCancel').addEventListener('click',closeEarlier);
+    form.addEventListener('keydown',ev=>{if(ev.key==='Escape' && !shiftActionBusy){ev.preventDefault();closeEarlier();}});
+    form.addEventListener('submit',async ev=>{
+      ev.preventDefault();
+      if(shiftActionBusy || !earlierEntryDraft || !form.reportValidity()) return;
+      await clockIn({...earlierEntryDraft,time:input.value});
+    });
+  }
+
   const inBtn = document.getElementById('clockInBtn');
   const startBreakBtn = document.getElementById('startBreakBtn');
   const endBreakBtn = document.getElementById('endBreakBtn');
@@ -2020,6 +2058,7 @@ function resetSignedOutState(){
     Object.keys(localStorage).filter(k => k.startsWith('nc_initial:')).forEach(k => localStorage.removeItem(k));
   }catch(e){ /* localStorage unavailable */ }
   currentUserId = null;
+  earlierEntryDraft = null;
   appStarted = false;
   settings = null;
   monthData = { days:{} };

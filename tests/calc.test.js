@@ -85,3 +85,15 @@ test('netElapsedMinutes and break helpers', () => {
   assert.equal(C.sessionBreakMinutes(open, '00:10'), 20); // wraps midnight
   assert.equal(C.sessionBreakMinutes(open), 0);
 });
+
+test('earlier entry accepts a past time today and rejects future, invalid and stale entries',()=>{
+ const now=new Date(2026,10,23,9,0).getTime();
+ assert.equal(C.earlierEntryError('2026-11-23','08:00',now),null);
+ assert.equal(C.earlierEntryError('2026-11-23','09:00',now),null);
+ for(const time of ['09:01','25:00','','8:00']) assert.ok(C.earlierEntryError('2026-11-23',time,now));
+ assert.ok(C.earlierEntryError('2026-11-22','08:00',now));
+ assert.ok(C.earlierEntryError('2026-11-23','00:00',new Date(2026,10,23,17).getTime()));
+ const session={date:'2026-11-23',checkIn:'08:00',breaks:[]};
+ assert.equal(C.netElapsedMinutes(session,now),60);
+ near(C.dayHours({in:session.checkIn,out:'16:00',brk:0},settings).total,8);
+});

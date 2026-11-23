@@ -1477,3 +1477,9 @@ html.keyboard-open .settings-drawer{max-height:calc(var(--app-h, 100dvh) - 12px)
 @media(max-width:360px){ .plan-week{grid-template-columns:repeat(3,minmax(0,1fr));} }
 
 .departure-hint { margin:6px 0 12px; font-size:.875rem; line-height:1.5; color:var(--ink-dim); text-align:center; }
+
+.earlier-link { display:block;margin:0 auto;background:none;border:0;color:var(--ink-dim);font-size:.875rem;min-height:44px;padding:6px 12px;text-decoration:underline;text-underline-offset:3px; }
+.earlier-entry:not([hidden]) { display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;margin:0 0 10px;font-size:.875rem; }
+.earlier-entry input { width:112px;min-width:0;min-height:44px;font-size:1rem;padding:6px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);color:var(--ink); }
+.earlier-entry button { min-height:44px;padding:6px 12px;border:0;border-radius:8px;background:var(--surface-2);color:var(--ink); }
+.earlier-entry button[type=submit] { color:var(--accent-text);font-weight:600; }
