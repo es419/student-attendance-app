@@ -11,7 +11,7 @@ function harness(options={}){
  runShiftAction:async fn=>fn({date:'2026-11-23',time:'09:00',at:new Date(2026,10,23,9).getTime()}),
  kvGetStrict:async()=>options.recorded?{days:{'2026-11-23':{in:'07:00',out:'08:00'}}}:null,
  saveActiveSession:async()=>{if(options.fail)return false;saved.push(JSON.parse(JSON.stringify(c.activeSession)));return true;},
- cancelAttendanceReminderMessages:async()=>{},scheduleCheckOutReminders:async()=>{},
+ cancelAttendanceReminderMessages:async()=>{},scheduleCheckOutReminders:async()=>{},refreshReceptionReminderSchedule:async()=>{},
  ATTENDANCE_REMINDER_MESSAGES:{checkIn:'in'},render(){},showToast(){},console});
  vm.runInContext(clock,c);return {c,saved};
 }

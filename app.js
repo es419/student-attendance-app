@@ -70,6 +70,7 @@ function readInitialCache(userId){
     monthData = cached.monthData || { days:{} };
     payslipActual = normalizePayslip(cached.payslipActual);
     activeSession = cached.activeSession || null;
+    receptionAssignments = receptionRows(Object.entries(cached.receptionAssignments || {}).map(([date,value]) => ({key:`reception:${date}`,value})));
     applyTheme();
     return true;
   }catch(e){
@@ -81,7 +82,7 @@ function writeInitialCache(userId){
   if(!userId) return;
   try{
     localStorage.setItem(initialCacheKey(userId), JSON.stringify({
-      settings, monthData, payslipActual, activeSession, cachedAt: Date.now()
+      settings, monthData, payslipActual, activeSession, receptionAssignments, cachedAt: Date.now()
     }));
   }catch(e){ /* cache is best-effort */ }
 }
@@ -369,8 +370,10 @@ async function refreshAttendanceReminderSchedule(){
   try{
     await scheduleCheckInReminders();
     if(activeSession) await scheduleCheckOutReminders();
+    await refreshReceptionReminderSchedule();
   }catch(e){
     console.error('refreshAttendanceReminderSchedule failed', e);
+    receptionScheduleStatus = 'עדכון התזכורות לא הושלם. פתח את שיבוץ קבלת הקהל ולחץ שמור כדי לנסות שוב.';
   }
 }
 
@@ -663,7 +666,7 @@ async function loadInitialData(userId = currentUserId){
     .from('kv_store')
     .select('key, value')
     .eq('user_id', userId)
-    .in('key', ['settings', monthDataKey, payslipKey, 'activeSession']);
+    .or(`key.in.(settings,${monthDataKey},${payslipKey},activeSession),and(key.like.reception:*,key.gte.reception:${AttendanceReception.dateKey()}))`);
 
   if(error) throw error;
 
@@ -673,6 +676,7 @@ async function loadInitialData(userId = currentUserId){
   monthData = byKey[monthDataKey] || { days:{} };
   payslipActual = normalizePayslip(byKey[payslipKey]);
   activeSession = byKey.activeSession || null;
+  receptionAssignments = receptionRows(rows);
   applyTheme();
   writeInitialCache(userId);
 }
@@ -765,6 +769,7 @@ async function clockIn(earlier = null){
     try{
       await cancelAttendanceReminderMessages([ATTENDANCE_REMINDER_MESSAGES.checkIn]);
       await scheduleCheckOutReminders();
+      await refreshReceptionReminderSchedule();
     }catch(e){ console.error('reminders failed', e); } // reminders are best-effort
     earlierEntryDraft = null;
     render();
@@ -1147,7 +1152,7 @@ async function exportAllHistoryToExcel(){
 // True while the user is typing or has the entry editor open.
 function isUserEditing(){
   if(earlierEntryDraft) return true;
-  if(plannerOpen || plannerSaving) return true;
+  if(plannerOpen || plannerSaving || receptionOpen || receptionSaving) return true;
   const overlay = document.getElementById('entryEditorOverlay');
   if(overlay && !overlay.hidden) return true;
   const a = document.activeElement;
@@ -1163,7 +1168,7 @@ function flushPendingRender(){
   if(renderPending && !isUserEditing()){ renderPending = false; render(); }
 }
 document.addEventListener('focusout', () => setTimeout(flushPendingRender, 250));
-const dataFingerprint = () => JSON.stringify([settings, monthData, payslipActual, activeSession]);
+const dataFingerprint = () => JSON.stringify([settings, monthData, payslipActual, activeSession, receptionAssignments]);
 
 // Each tab remembers where it was scrolled to, like a native tab bar does.
 const tabScroll = { today: 0, shifts: 0 };
@@ -1196,6 +1201,7 @@ function render(){
     <div class="tab-panel" data-panel="today" ${activeTab!=='today' ? 'hidden' : ''}>
     ${buildShiftWidget()}
     <div class="today-body">
+    ${buildReception()}
     <section class="ledger-card">
       <div class="cap-label">
         <span>0</span>
@@ -1315,6 +1321,7 @@ function render(){
   wireEntryInteractions();
   wireShiftWidget();
   wirePlanner();
+  wireReception();
   updateShiftBusy();
   tickShiftTimer();
   main.classList.toggle('shifts-active', activeTab === 'shifts');
@@ -1324,7 +1331,7 @@ function render(){
 }
 
 function switchTab(tab){
-  if((plannerOpen || plannerSaving) && tab !== activeTab){showToast('שמור או בטל את התכנון לפני מעבר למסך אחר');return;}
+  if((plannerOpen || plannerSaving || receptionOpen || receptionSaving) && tab !== activeTab){showToast('שמור או סגור את העריכה לפני מעבר למסך אחר');return;}
   if(tab !== 'today' && tab !== 'shifts') return;
   saveTabScroll(); // remember the tab we are leaving
   activeTab = tab;
@@ -2059,6 +2066,10 @@ function resetSignedOutState(){
   }catch(e){ /* localStorage unavailable */ }
   currentUserId = null;
   earlierEntryDraft = null;
+  receptionAssignments = {};
+  receptionDraft = null;
+  receptionOpen = false;
+  receptionScheduleStatus = '';
   appStarted = false;
   settings = null;
   monthData = { days:{} };
@@ -2077,6 +2088,7 @@ async function refreshFromCloud(){
       const before = dataFingerprint();
       await loadInitialData(currentUserId);
       if(dataFingerprint() !== before) renderUnlessEditing();
+      refreshReceptionInBackground();
     }catch(e){
       console.error('foreground refresh failed', e);
     }finally{
