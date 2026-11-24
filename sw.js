@@ -1,14 +1,12 @@
-const CACHE_NAME = 'attendance-shell-v35';
+const CACHE_NAME = 'attendance-shell-v36';
 const APP_SHELL = [
   './',
   './index.html',
-  './styles.css?v=attendance-reception-v16',
+  './styles.css?v=attendance-v17',
   './calc.js?v=attendance-calc-v10',
-  './app.js?v=attendance-reception-v16',
+  './app.js?v=attendance-v17',
   './planner.js?v=2',
   './planner-ui.js?v=3',
-  './reception.js?v=1',
-  './reception-ui.js?v=1',
   './vendor/supabase.js',
   './manifest.json',
   './icon-180.png',
@@ -124,7 +122,7 @@ self.addEventListener('push', (event) => {
     badge: 'icon-192.png',
     dir: 'rtl',
     lang: 'he',
-    tag: typeof data.body === 'string' && data.body.startsWith('👔 קבלת קהל · ') ? `reception-${data.body}` : 'break-reminder',
+    tag: 'break-reminder',
     renotify: true
   }));
 });
