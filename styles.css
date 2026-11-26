@@ -1426,14 +1426,9 @@ html.keyboard-open .app{
 html.keyboard-open .entry-editor{max-height:calc(var(--app-h, 100dvh) - 36px);}
 html.keyboard-open .settings-drawer{max-height:calc(var(--app-h, 100dvh) - 12px);}
 
-/* Compact forecast inside the existing hours ledger. */
-.plan-inline { position:relative; margin:12px 0; padding:10px 0; border-block:1px solid var(--border); }
-#planSummary { display:flex;flex-direction:column;gap:5px;min-height:44px;padding-inline-end:72px;justify-content:center;font-size:.875rem;line-height:1.5; }
-.forecast-value strong { margin-inline-start:6px; color:var(--accent-text);font-size:1rem;white-space:nowrap; }
-.forecast-status,.forecast-empty,.plan-note { color:var(--ink-dim);font-size:.875rem;line-height:1.6; }
-#plannerDetails>summary { position:absolute;inset-inline-end:0;top:10px;min-height:44px;display:flex;align-items:center;padding:0 10px;border-radius:8px;background:var(--surface-2);color:var(--accent-text);cursor:pointer;font-size:.875rem; }
-#plannerDetails>summary::-webkit-details-marker { display:none; }
-#plannerDetails[open]>summary { background:var(--border); }
+/* Work planning lives in Settings; the Today ledger contains recorded hours only. */
+.plan-inline { margin:0; }
+.plan-note { color:var(--ink-dim);font-size:.875rem;line-height:1.6; }
 #plannerForm { padding-top:12px;font-size:1rem; }
 .plan-inline details details summary { cursor:pointer;min-height:44px;padding:12px 0;font-weight:600; }
 .plan-inline input { width:100%;min-width:0;min-height:44px;background:var(--surface-2);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:8px;font-size:1rem; }

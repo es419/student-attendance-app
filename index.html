@@ -48,7 +48,7 @@ if ('serviceWorker' in navigator) {
 </script>
 <link rel="dns-prefetch" href="//ojzemdselyxxscbbvssm.supabase.co">
 <link rel="preconnect" href="https://ojzemdselyxxscbbvssm.supabase.co" crossorigin>
-<link rel="stylesheet" href="styles.css?v=attendance-v20">
+<link rel="stylesheet" href="styles.css?v=attendance-v21">
 </head>
 <body>
 <div class="initial-splash" id="initialSplash" aria-live="polite">
@@ -132,6 +132,8 @@ if ('serviceWorker' in navigator) {
     </label>
     </details>
 
+    <div id="workPlanSettings"></div>
+
     <details class="set-group"><summary>ניכויים ותוספות</summary>
     <h3>רכיבי ניכוי מהברוטו (%)</h3>
     <div id="deductionsSettings"></div>
@@ -183,6 +185,7 @@ if ('serviceWorker' in navigator) {
     <button id="saveSettings" type="button">שמור הגדרות</button>
     <button id="resetData" type="button">איפוס כל הנתונים</button>
     <p class="settings-note">כל הנתונים נשמרים בחשבון שלך בענן ולא רק על המכשיר — הם יהיו זמינים מכל מכשיר שבו תתחבר.</p>
+    <p class="settings-note">גרסה 21</p>
   </aside>
   <div class="drawer-overlay" id="drawerOverlay" hidden></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -191,7 +194,7 @@ if ('serviceWorker' in navigator) {
 <script src="vendor/supabase.js"></script>
 <script src="calc.js?v=attendance-calc-v10"></script>
 <script src="planner.js?v=2"></script>
-<script src="planner-ui.js?v=3"></script>
-<script src="app.js?v=attendance-v20"></script>
+<script src="planner-ui.js?v=4"></script>
+<script src="app.js?v=attendance-v21"></script>
 </body>
 </html>

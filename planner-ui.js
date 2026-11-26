@@ -2,16 +2,6 @@
 let plannerOpen = false;
 let plannerSaving = false;
 const PLAN_DAYS = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
-function planForecast(){
-  return AttendancePlanner.forecast(settings.workPlan,currentDate,computeMonth().perDay,activeSession,new Date(),settings.freeBreakMinutes);
-}
-function planSummary(){
-  if(!settings.workPlan) return '<span class="forecast-empty">הגדר ימי עבודה להצגת צפי</span>';
-  const f=planForecast();
-  const status = f.gap>0.01 ? `חוסר צפוי: ${fmtHours(f.gap)} ש׳` : f.over>0.01 ? `${fmtHours(f.over)} ש׳ מעל היעד` : 'היעד צפוי להתמלא';
-  const warning = f.unresolved ? ' · נדרש תיקון משמרת פתוחה' : f.projected>settings.monthlyCap ? ' · מעל תקרת התשלום' : '';
-  return `<span class="forecast-value">צפי לסוף החודש <strong class="mono">${fmtHours(f.projected)} ש׳</strong></span><span class="forecast-status">${status}${f.target!==settings.monthlyCap ? ` · יעד ${fmtHours(f.target)} ש׳` : ''}${warning}</span>`;
-}
 function buildPlanner(){
   const p=AttendancePlanner.normalize(settings.workPlan), today=todayStr();
   const rows=[];
@@ -20,8 +10,8 @@ function buildPlanner(){
     if(d<today || monthData.days[d] || activeSession?.date===d) continue;
     rows.push(`<label class="plan-date-row"><span>${day}.${date.getMonth()+1} · ${PLAN_DAYS[date.getDay()]}</span><input type="number" data-plan-date="${d}" min="0" max="16" step="0.25" inputmode="decimal" placeholder="${p.weekly[date.getDay()]}" value="${Object.hasOwn(p.overrides,d)?p.overrides[d]:''}" aria-label="שעות בתאריך ${d}"></label>`);
   }
-  return `<div class="plan-inline"><div id="planSummary">${planSummary()}</div>
-    <details id="plannerDetails" ${plannerOpen?'open':''}><summary aria-label="עריכת תכנון ימי העבודה">תכנון</summary>
+  return `<div class="plan-inline">
+    <details id="plannerDetails" class="set-group" ${plannerOpen?'open':''}><summary>תכנון ימי העבודה</summary>
     <form id="plannerForm"><label class="plan-target">יעד שעות חודשי<input id="planTarget" type="number" min="1" max="744" step="0.25" value="${p.target}" required></label>
     <p class="plan-note">שעות שייספרו לאחר ניכוי הפסקות, עד 16 שעות למשמרת. 0 = לא עובד. חגים וחופשות יש לעדכן ידנית.</p>
     <div class="plan-week">${PLAN_DAYS.map((name,i)=>`<label><span>${name}</span><input type="number" data-plan-day="${i}" min="0" max="16" step="0.25" inputmode="decimal" value="${p.weekly[i]}" required aria-label="שעות ביום ${name}"></label>`).join('')}</div>
@@ -30,10 +20,17 @@ function buildPlanner(){
     <div class="plan-actions"><button type="submit">שמור תכנון</button><button type="button" id="planCancel">ביטול</button></div><p id="planSaveStatus" role="status"></p>
     </form></details></div>`;
 }
+function renderPlannerSettings(){
+  const host = $('#workPlanSettings');
+  if(!host) return;
+  host.innerHTML = buildPlanner();
+  wirePlanner();
+}
 function wirePlanner(){
   const details=$('#plannerDetails'), form=$('#plannerForm');
-  details.addEventListener('toggle',()=>{plannerOpen=details.open; if(!plannerOpen && !plannerSaving) flushPendingRender();});
-  $('#planCancel').addEventListener('click',()=>{plannerOpen=false;render();});
+  if(!details || !form) return;
+  details.addEventListener('toggle',()=>{if(!details.isConnected) return; plannerOpen=details.open; if(!plannerOpen && !plannerSaving) flushPendingRender();});
+  $('#planCancel').addEventListener('click',()=>{plannerOpen=false;renderPlannerSettings();flushPendingRender();});
   form.addEventListener('input',ev=>{
     if(ev.target.dataset.planDay!==undefined){
       document.querySelectorAll('[data-plan-date]').forEach(input=>{
@@ -59,7 +56,7 @@ function wirePlanner(){
       latest.workPlan=next;
       if(!await kvSet('settings',latest)) throw new Error('save failed');
       settings=latest;writeInitialCache(currentUserId);plannerOpen=false;
-      render();showToast('התכנון נשמר והתחזית עודכנה');
+      render();renderPlannerSettings();showToast('התכנון נשמר');
     }catch(error){
       $('#planSaveStatus').textContent='התכנון לא נשמר. בדוק חיבור ונסה שוב; הערכים שהזנת נשארו כאן.';
       form.querySelectorAll('input,button').forEach(el=>el.disabled=false);

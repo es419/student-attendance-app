@@ -1000,8 +1000,6 @@ function buildShiftWidget(){
 }
 
 function tickShiftTimer(){
-  const summary = document.getElementById('planSummary');
-  if(summary && !plannerOpen && !plannerSaving) summary.innerHTML = planSummary();
   if(activeSession && AttendanceCalc.isStaleSession(activeSession, Date.now()) && !document.getElementById('resolveStaleBtn')){
     renderUnlessEditing(); // the shift just crossed the limit while the app was open
     return;
@@ -1306,7 +1304,6 @@ function renderNow(){
         <div class="punch-holes"></div>
       </div>
 
-      ${buildPlanner()}
       <div class="ledger-grid">
         <div class="ledger-stat regular"><span class="stat-label">רגילות</span><span class="stat-value mono">${fmtHours(calc.paidRegular)}</span></div>
         <div class="ledger-stat ot125"><span class="stat-label">125%</span><span class="stat-value mono">${fmtHours(calc.paidOt125)}</span></div>
@@ -1420,7 +1417,6 @@ function renderNow(){
   if(exportAllBtn) exportAllBtn.addEventListener('click', () => exportAllHistoryToExcel());
   wireEntryInteractions();
   wireShiftWidget();
-  wirePlanner();
   updateShiftBusy();
   tickShiftTimer();
   main.classList.toggle('shifts-active', activeTab === 'shifts');
@@ -2136,6 +2132,8 @@ function updateThemeButtonsUI(){
 
 function openSettings(){
   settingsDraft = deepClone(settings);
+  plannerOpen = false;
+  renderPlannerSettings();
   $('#setRate').value = settings.hourlyRate;
   $('#setRegularHours').value = settings.regularHours;
   $('#setSickDayHours').value = settings.sickDayHours ?? 0;
@@ -2161,13 +2159,15 @@ function openSettings(){
   });
 }
 function closeSettings(){
-  if(settingsSaving) return;
+  if(settingsSaving || plannerSaving) return;
   settingsDraft = null;
+  plannerOpen = false;
   $('#settingsDrawer').classList.remove('open');
   document.body.classList.remove('settings-open');
   window.setTimeout(() => {
     if(!$('#settingsDrawer').classList.contains('open')) $('#drawerOverlay').hidden = true;
   }, 360);
+  flushPendingRender();
 }
 
 document.querySelectorAll('.theme-mode-btn').forEach(btn => {
