@@ -1682,6 +1682,7 @@ function switchTab(tab){
     const selected = btn.dataset.tab === tab;
     btn.classList.toggle('active', selected);
     btn.setAttribute('aria-selected', selected ? 'true' : 'false');
+    btn.setAttribute('aria-current', selected ? 'page' : 'false');
   });
   document.querySelectorAll('[data-panel]').forEach(panel => {
     panel.hidden = panel.dataset.panel !== tab;
