@@ -1,12 +1,18 @@
-const CACHE_NAME = 'attendance-shell-v40';
+const CACHE_NAME = 'attendance-shell-2.0.0-b22';
 const APP_SHELL = [
   './',
   './index.html',
-  './styles.css?v=attendance-v21',
+  './styles.css?v=2.0.0-b22',
+  './professional.css?v=2.0.0-b22',
+  './release.js?v=2.0.0-b22',
+  './records.js?v=2.0.0-b22',
+  './report.js?v=2.0.0-b22',
+  './enhancements.js?v=2.0.0-b22',
+  './updates.js?v=2.0.0-b22',
   './calc.js?v=attendance-calc-v10',
-  './app.js?v=attendance-v21',
+  './app.js?v=2.0.0-b22',
   './planner.js?v=2',
-  './planner-ui.js?v=4',
+  './planner-ui.js?v=2.0.0-b22',
   './vendor/supabase.js',
   './manifest.json',
   './fonts/heebo-hebrew.woff2',
@@ -18,98 +24,50 @@ const APP_SHELL = [
   './icon-header-teal.png'
 ];
 
-self.addEventListener('install', (event) => {
+self.addEventListener('install', event => {
   event.waitUntil((async () => {
-    const cache = await caches.open(CACHE_NAME);
-
-    // The local shell is required for an offline/instant repeat launch.
-    // cache:'reload' skips the browser HTTP cache (GitHub Pages sends max-age),
-    // otherwise a fresh worker could precache the previous deploy's files.
-    await Promise.all(APP_SHELL.map(async (path) => {
-      const response = await fetch(path, { cache: 'reload' });
-      if(!response.ok) throw new Error('Precache failed: ' + path);
-      await cache.put(path, response);
+    const cache=await caches.open(CACHE_NAME);
+    const results=await Promise.allSettled(APP_SHELL.map(async path=>{
+      const response=await fetch(path,{cache:'reload'});
+      if(!response.ok)throw new Error('Precache failed: '+path);
+      await cache.put(path,response);
     }));
-
-    await self.skipWaiting();
+    if(results.some(r=>r.status==='rejected')){await caches.delete(CACHE_NAME);throw new Error('Incomplete app release');}
+    // An upgrade waits here until a user explicitly chooses Install.
   })());
 });
-
-self.addEventListener('activate', (event) => {
-  event.waitUntil((async () => {
-    const keys = await caches.keys();
-    await Promise.all(
-      keys
-        .filter((key) => key.startsWith('attendance-shell-') && key !== CACHE_NAME)
-        .map((key) => caches.delete(key))
-    );
+self.addEventListener('message',event=>{
+  if(event.data?.type==='SKIP_WAITING')event.waitUntil(self.skipWaiting());
+});
+self.addEventListener('activate',event=>{
+  event.waitUntil((async()=>{
+    const old=(await caches.keys()).filter(k=>k.startsWith('attendance-shell-')&&k!==CACHE_NAME);
+    // Two earlier shells support tabs that have not yet accepted the update.
+    await Promise.all(old.slice(0,-2).map(k=>caches.delete(k)));
     await self.clients.claim();
   })());
 });
-
-self.addEventListener('fetch', (event) => {
-  if(event.request.method !== 'GET') return;
-
-  const url = new URL(event.request.url);
-
-  if(url.origin !== self.location.origin) return;
-
-  if(event.request.mode === 'navigate'){
-    // Start the refresh while the fetch event is still being dispatched so the
-    // browser keeps the worker alive for the background update.
-    const refreshPromise = refreshNavigation(event.request);
-    event.waitUntil(refreshPromise.then(() => undefined));
-    event.respondWith(navigationCacheFirst(refreshPromise));
-    return;
+self.addEventListener('fetch',event=>{
+  if(event.request.method!=='GET')return;
+  const url=new URL(event.request.url);if(url.origin!==self.location.origin)return;
+  if(url.pathname.endsWith('/release.json')){event.respondWith(fetch(event.request,{cache:'no-store'}));return;}
+  if(event.request.mode==='navigate'){
+    event.respondWith(navigationCacheFirst());return;
   }
-
-  // CSS/JS/icons return from cache immediately and refresh silently for the next
-  // request. The cache-version bump guarantees a clean shell on deployments.
-  const refreshPromise = refreshAsset(event.request);
-  event.waitUntil(refreshPromise.then(() => undefined));
-  event.respondWith(staleWhileRevalidate(event.request, refreshPromise));
+  event.respondWith(cachedAsset(event.request));
 });
-
 async function navigationCacheFirst(refreshPromise){
-  // A slow connection must not delay repeat launches. The fetch handler keeps
-  // the refresh alive with waitUntil so the next launch receives the update.
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match('./index.html');
-  if(cached) return cached;
-  const fresh = await refreshPromise;
-  return fresh && fresh.ok ? fresh : Response.error();
+  const cache=await caches.open(CACHE_NAME),cached=await cache.match('./index.html');
+  if(cached)return cached;
+  let fresh;
+  try{fresh=refreshPromise?await refreshPromise:await fetch('./index.html',{cache:'no-store'});}catch{return Response.error();}
+  return fresh&&fresh.ok?fresh:Response.error();
 }
-
-async function refreshNavigation(request){
-  try{
-    const response = await fetch(request, { cache: 'no-store' });
-    if(response.ok){
-      const cache = await caches.open(CACHE_NAME);
-      await cache.put('./index.html', response.clone());
-    }
-    return response;
-  }catch{
-    return null;
-  }
-}
-
-async function refreshAsset(request){
-  try{
-    const response = await fetch(request);
-    if(response.ok){
-      const cache = await caches.open(CACHE_NAME);
-      await cache.put(request, response.clone());
-    }
-    return response;
-  }catch{
-    return null;
-  }
-}
-
-async function staleWhileRevalidate(request, refreshPromise){
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
-  return cached || (await refreshPromise) || Response.error();
+async function cachedAsset(request){
+  const cache=await caches.open(CACHE_NAME);
+  const cached=await cache.match(request)||await caches.match(request);
+  if(cached)return cached;
+  try{return await fetch(request);}catch{return Response.error();}
 }
 
 self.addEventListener('push', (event) => {

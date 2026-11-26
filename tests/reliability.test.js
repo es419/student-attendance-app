@@ -19,7 +19,7 @@ function shifts({ days = {}, active = null, failDelete = false, failWrite = fals
   const messages = [], cache = [];
   const now = new Date(2026,10,26,14).getTime();
   const c = vm.createContext({ currentUserId:'owner', monthChangeBusy:false, shiftActionBusy:false, transitionNext:false,
-    currentDate:new Date(2026,10,26), activeSession:clone(active), earlierEntryDraft:null, AttendanceCalc:C,
+    currentDate:new Date(2026,10,26), activeSession:clone(active), earlierEntryDraft:null, AttendanceCalc:C, AttendanceRecords:require('../records.js'), deepClone:clone,
     nowTimeStr:()=> '14:00', todayStr:()=>date, Date:class extends Date { static now(){ return now; } },
     updateShiftBusy(){}, render(){}, showToast:m=>messages.push(m), console:quiet, monthKey:mk,
     writeInitialCache:()=>cache.push(clone(c.activeSession)),
@@ -83,7 +83,7 @@ function insights(getAll) {
   const box={innerHTML:'',isConnected:true};
   const settings={hourlyRate:40,regularHours:8,sickDayHours:8,ot125Hours:2,monthlyCap:120,freeBreakMinutes:40,deductions:[],additions:[]};
   const c=vm.createContext({ currentUserId:'owner', document:{getElementById:id=>id==='insightsBody'?box:null},
-    getAllMonthsData:getAll, settings, deepClone:clone, AttendanceCalc:C, monthKey:mk,
+    getAllMonthsData:getAll, settings, deepClone:clone, AttendanceCalc:C, AttendanceRecords:require('../records.js'), deepClone:clone, monthKey:mk,
     HE_MONTHS:Array.from({length:12},(_,i)=>`M${i+1}`), fmtHours:n=>n.toFixed(1), console:quiet });
   vm.runInContext(section('let insightsRequestId =', '// Home-screen shortcut'),c);
   return {c,box};
@@ -115,7 +115,7 @@ test('summary response is ignored after an account switch', async()=>{
 });
 test('month switch keeps the visible month/data until a successful read, ignoring double clicks', async()=>{
   const waits=[]; const current=new Date(2026,10,1); const old={days:{old:existing}}; let renders=0;
-  const c=vm.createContext({ currentDate:current, currentUserId:'owner', shiftActionBusy:false,plannerOpen:false,plannerSaving:false,
+  const c=vm.createContext({ currentDate:current, currentUserId:'owner', shiftActionBusy:false,plannerOpen:false,plannerSaving:false,payslipDirty:false,
     monthData:old, payslipActual:null, monthKey:mk, softHaptic(){},setBusyBar(){},normalizePayslip:x=>x,
     writeInitialCache(){},render:()=>renders++,showToast(){},console:quiet,
     kvGetStrict:key=>new Promise(resolve=>waits.push({key,resolve})) });
@@ -127,7 +127,7 @@ test('month switch keeps the visible month/data until a successful read, ignorin
 });
 test('failed month switch leaves both label and entries intact', async()=>{
   const current=new Date(2026,10,1), old={days:{old:existing}};const messages=[];
-  const c=vm.createContext({currentDate:current,currentUserId:'owner',shiftActionBusy:false,plannerOpen:false,plannerSaving:false,
+  const c=vm.createContext({currentDate:current,currentUserId:'owner',shiftActionBusy:false,plannerOpen:false,plannerSaving:false,payslipDirty:false,
     monthData:old,monthKey:mk,softHaptic(){},setBusyBar(){},console:quiet,showToast:m=>messages.push(m),kvGetStrict:async()=>{throw Error('offline')}});
   vm.runInContext(section('let monthChangeBusy =','// ---- settings drawer'),c);await c.changeMonth(1);
   assert.equal(c.currentDate,current);assert.equal(c.monthData,old);assert.match(messages[0],/לא ניתן לטעון/);

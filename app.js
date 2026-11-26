@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS = {
   checkOutRepeatMinutes: 30,
   themeMode: 'system',
   accentColor: 'bronze',
+  hoursFormat: 'decimal',
   deductions: [
     { id: 'pension', name: 'פנסיה', percent: 6 },
     { id: 'keren', name: 'קרן השתלמות', percent: 2.5 },
@@ -505,29 +506,35 @@ async function kvGetStrict(key){
 }
 
 async function kvSet(key, value){
+  beginSave();
   try{
     const userId = currentUserId;
-    if(!userId) return false;
+    if(!userId) throw new Error('No authenticated user');
     const { error } = await supabaseClient
       .from('kv_store')
       .upsert({ user_id: userId, key, value, updated_at: new Date().toISOString() }, { onConflict: 'user_id,key' });
     if(error) throw error;
+    endSave(true);
     return true;
   }catch(e){
     console.error('kvSet error', e);
+    endSave(false);
     return false;
   }
 }
 
 async function kvDelete(key){
+  beginSave();
   try{
     const userId = currentUserId;
-    if(!userId) return false;
+    if(!userId) throw new Error('No authenticated user');
     const { error } = await supabaseClient.from('kv_store').delete().eq('user_id', userId).eq('key', key);
     if(error) throw error;
+    endSave(true);
     return true;
   }catch(e){
     console.error('kvDelete error', e);
+    endSave(false);
     return false;
   }
 }
@@ -697,7 +704,9 @@ async function mutateMonth(mk, mutator){
     const latest = (await kvGetStrict(key)) || { days:{} };
     if(userId !== currentUserId) throw new Error('Account changed during month edit');
     if(!latest.days || typeof latest.days !== 'object') latest.days = {};
+    const before = deepClone(latest.days);
     mutator(latest);
+    AttendanceRecords.recordChanges(latest, before);
     const ok = await kvSet(key, latest);
     if(!ok) throw new Error('failed to save month');
     if(userId === currentUserId && mk === monthKey(currentDate)){
@@ -1055,7 +1064,7 @@ function shiftSheetRows(md, calc){
   return [SHIFT_HEADER, ...rows, [], totals];
 }
 
-function fmtHours(h){ return h.toLocaleString('he-IL',{minimumFractionDigits:1,maximumFractionDigits:1}); }
+function fmtHours(h){ return AttendanceRecords.formatHours(h, settings?.hoursFormat); }
 function fmtMoney(n){ return '₪' + n.toLocaleString('he-IL',{minimumFractionDigits:0,maximumFractionDigits:0}); }
 function fmtMoneyDiff(n){ return `${n > 0 ? '+' : n < 0 ? '−' : ''}${fmtMoney(Math.abs(n))}`; }
 function payslipDiff(actual, estimated){
@@ -1077,7 +1086,7 @@ function buildPayslipCard(calc){
       <div class="payslip-row"><strong>ברוטו</strong><span>${fmtMoney(calc.gross)}</span><span>${actual.gross === null ? '—' : fmtMoney(actual.gross)}</span>${payslipDiff(actual.gross,calc.gross)}</div>
       <div class="payslip-row"><strong>נטו</strong><span>${fmtMoney(calc.net)}</span><span>${actual.net === null ? '—' : fmtMoney(actual.net)}</span>${payslipDiff(actual.net,calc.net)}</div>
     </div>
-    <div class="payslip-actions"><button type="button" id="savePayslipBtn">שמור השוואה</button><button type="button" id="clearPayslipBtn" class="payslip-clear">נקה</button></div>
+    <div class="payslip-actions"><button type="button" id="savePayslipBtn">שמור השוואה</button><button type="button" id="clearPayslipBtn" class="payslip-clear">נקה</button><button type="button" id="cancelPayslipDraft" class="payslip-clear">בטל שינויים</button></div>
   </details>`;
 }
 
@@ -1224,7 +1233,7 @@ async function exportAllHistoryToExcel(){
 
 // True while the user is typing or has the entry editor open.
 function isUserEditing(){
-  if(earlierEntryDraft) return true;
+  if(earlierEntryDraft || payslipDirty) return true;
   if(plannerOpen || plannerSaving) return true;
   const overlay = document.getElementById('entryEditorOverlay');
   if(overlay && !overlay.hidden) return true;
@@ -1273,28 +1282,22 @@ function renderNow(){
   const capPct = Math.min(100, (calc.rawTotal / settings.monthlyCap) * 100);
   const overPct = calc.capExceeded ? 100 - (settings.monthlyCap/calc.rawTotal*100) : 0;
 
-  const dates = Object.keys(monthData.days).sort().reverse();
+  const dates = visibleDates(calc);
 
   main.innerHTML = `
-    <div class="tab-bar" data-active="${activeTab}">
-      <button type="button" data-tab="today" class="tab-btn ${activeTab==='today'?'active':''}">היום</button>
-      <button type="button" data-tab="shifts" class="tab-btn ${activeTab==='shifts'?'active':''}">משמרות</button>
-      <button type="button" data-tab="insights" class="tab-btn ${activeTab==='insights'?'active':''}">סיכום</button>
-    </div>
-
     <div class="tab-panel" data-panel="today" ${activeTab!=='today' ? 'hidden' : ''}>
     ${buildShiftWidget()}
     <div class="today-body">
     <section class="ledger-card">
       <div class="net-hero">
-        <span class="net-hero-label">נטו משוער החודש</span>
+        <span class="net-hero-label">נטו משוער · ${HE_MONTHS[currentDate.getMonth()]} ${currentDate.getFullYear()}</span>
         <span class="net-hero-value mono" id="netHero" data-value="${Math.round(calc.net)}">${fmtMoney(calc.net)}</span>
         <span class="net-hero-sub">ברוטו ${fmtMoney(calc.gross)} · ${fmtHours(calc.rawTotal)} שעות</span>
       </div>
       <div class="cap-label">
         <span>0</span>
         <span class="cap-remaining">${calc.capExceeded ? 'חריגה מהתקרה' : `נותרו ${fmtHours(Math.max(0, settings.monthlyCap - calc.rawTotal))} ש׳`}</span>
-        <span>${settings.monthlyCap} שעות (תקרה)</span>
+        <span><bdi>${fmtHours(calc.rawTotal)}</bdi> מתוך ${settings.monthlyCap} שעות</span>
       </div>
       <div class="punch-strip">
         <div class="punch-fill${animateNext ? ' grow' : ''}">
@@ -1315,7 +1318,7 @@ function renderNow(){
       ${calc.excessBreakMinTotal > 0 ? `<div class="break-note">${ICONS.coffee}החודש נוכו ${Math.round(calc.excessBreakMinTotal)} דק׳ (${fmtHours(calc.excessBreakMinTotal/60)} ש׳) בגין חריגות הפסקה מעבר ל-${settings.freeBreakMinutes} הדק׳ הפטורות ליום.</div>` : ''}
       ${calc.sickDays > 0 ? `<div class="sick-note">נכללו ${calc.sickDays} ימי מחלה (${fmtHours(calc.sickHours)} שעות), לפי התקן שהוגדר.</div>` : ''}
 
-      <div class="pay-breakdown">
+      <details id="salaryDetails" class="salary-details" ${salaryDetailsOpen?'open':''}><summary>פירוט חישוב השכר</summary><div class="pay-breakdown">
         <div class="pay-row"><span>שכר משעות עבודה ומחלה</span><span class="mono">${fmtMoney(calc.hoursGross)}</span></div>
         ${calc.additionAmounts.filter(a=>a.amount>0).length ? `<div class="additions-list">
           ${calc.additionAmounts.filter(a=>a.amount>0).map(a => `<div class="pay-row"><span>${escapeHtml(a.name)}</span><span class="mono addition">+${fmtMoney(a.amount)}</span></div>`).join('')}
@@ -1324,8 +1327,7 @@ function renderNow(){
         <div class="deductions-list">
           ${calc.deductionAmounts.map(d => `<div class="pay-row"><span>${escapeHtml(d.name)} (${d.percent}%)</span><span class="mono">-${fmtMoney(d.amount)}</span></div>`).join('')}
         </div>
-        <div class="pay-row net"><span>שכר נטו משוער</span><span class="mono">${fmtMoney(calc.net)}</span></div>
-      </div>
+      </div></details>
     </section>
     ${buildPayslipCard(calc)}
     </div>
@@ -1345,6 +1347,7 @@ function renderNow(){
       <div class="sheet-handle" aria-hidden="true"></div>
       <div class="entry-editor-head"><h2 id="entryEditorTitle">הוספת / עדכון יום עבודה</h2><button type="button" id="entryEditorClose" aria-label="סגירה">✕</button></div>
       <form id="entryForm">
+        <label id="entryTemplateLabel">מילוי ממשמרת קודמת<select id="entryTemplate"><option value="">בחר יום להעתקה</option>${templateOptions()}</select></label>
         <label>תאריך <input type="date" id="entryDate" value="${todayStr()}"></label>
         <label>סוג יום
           <select id="entryType">
@@ -1362,6 +1365,7 @@ function renderNow(){
         <p class="stale-note" id="staleNote" hidden>${ICONS.warn} משמרת שלא נסגרה — הזן את שעת היציאה האמיתית ושמור כדי לסגור אותה.</p>
         <p class="sick-entry-note" id="sickDayNote" hidden>${Number(settings.sickDayHours) > 0 ? `מחלה: ${fmtHours(settings.sickDayHours)} שעות בתעריף רגיל, בתשלום מהיום הראשון.` : 'כדי להזין יום מחלה, הגדירו תחילה את שעות התקן בהגדרות.'}</p>
         <button type="submit">שמור יום</button>
+        <div class="entry-secondary-actions"><button type="button" id="duplicateEntryBtn">שכפול ליום אחר</button><button type="button" id="entryHistoryBtn">היסטוריית היום</button></div>
       </form>
     </section>
     </div>
@@ -1370,16 +1374,18 @@ function renderNow(){
       <div class="list-header">
         <h2>המשמרות שלי</h2>
         <div class="list-header-actions">
-          <button type="button" id="exportExcelBtn" class="export-btn" title="ייצוא החודש הנוכחי לאקסל">${ICONS.chart}החודש</button>
-          <button type="button" id="exportAllBtn" class="export-btn" title="ייצוא כל ההיסטוריה לאקסל">${ICONS.folder}הכל</button>
-          <div class="view-toggle">
-            <button type="button" data-view="calendar" class="${viewMode==='calendar'?'active':''}">לוח</button>
-            <button type="button" data-view="list" class="${viewMode==='list'?'active':''}">רשימה</button>
-          </div>
+          <button type="button" id="monthHistoryBtn" class="export-btn">היסטוריה</button>
+          <details class="export-menu"><summary>ייצוא</summary><div>
+            <button type="button" id="exportPdfBtn">דוח PDF חודשי</button>
+            <button type="button" id="exportExcelBtn">אקסל לחודש</button>
+            <button type="button" id="exportAllBtn">אקסל לכל ההיסטוריה</button>
+          </div></details>
+          <div class="view-toggle"><button type="button" data-view="calendar" class="${viewMode==='calendar'?'active':''}">לוח</button><button type="button" data-view="list" class="${viewMode==='list'?'active':''}">רשימה</button></div>
         </div>
       </div>
+      <div class="shift-filters"><label class="search-field"><span class="sr-only">חיפוש משמרות</span><input id="shiftSearch" type="search" placeholder="חיפוש לפי תאריך או הערה" autocomplete="off"></label><label><span class="sr-only">סינון משמרות</span><select id="shiftFilter"><option value="all">כל הימים</option><option value="overtime">שעות נוספות</option><option value="sick">מחלה</option><option value="remote">מהבית</option><option value="notes">עם הערות</option></select></label><button type="button" id="clearShiftFilters" aria-label="ניקוי חיפוש וסינון">נקה</button></div>
       <div id="entriesContainer" class="${animateNext ? 'anim-list' : ''}">
-        ${viewMode === 'calendar' ? buildCalendar(calc) : dates.length === 0 ? emptyStateHTML() : buildList(dates, calc)}
+        ${viewMode === 'calendar' ? buildCalendar(calc) : dates.length === 0 ? (shiftSearch||shiftFilter!=='all'?'<div class="empty-state"><strong>לא נמצאו משמרות</strong><span>נסה חיפוש אחר או נקה את הסינון.</span></div>':emptyStateHTML()) : buildList(dates, calc)}
       </div>
     </section>
     </div>
@@ -1390,7 +1396,9 @@ function renderNow(){
   `;
 
   document.querySelectorAll('[data-tab]').forEach(btn => {
-    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    btn.onclick = () => switchTab(btn.dataset.tab);
+    btn.classList.toggle('active',btn.dataset.tab===activeTab);
+    btn.setAttribute('aria-current',btn.dataset.tab===activeTab?'page':'false');
   });
 
   $('#prevMonth').addEventListener('click', () => changeMonth(-1));
@@ -1417,6 +1425,7 @@ function renderNow(){
   if(exportAllBtn) exportAllBtn.addEventListener('click', () => exportAllHistoryToExcel());
   wireEntryInteractions();
   wireShiftWidget();
+  wireEnhancements();
   updateShiftBusy();
   tickShiftTimer();
   main.classList.toggle('shifts-active', activeTab === 'shifts');
@@ -1596,7 +1605,7 @@ function wireSheetDrag(){
   const sheet = overlay?.querySelector('.entry-editor');
   if(!sheet) return;
   let startY = null, dy = 0;
-  const down = ev => { if((ev.button !== undefined && ev.button !== 0) || ev.target.closest('button')) return; startY = ev.clientY; dy = 0; sheet.style.transition = 'none'; ev.currentTarget.setPointerCapture?.(ev.pointerId); };
+  const down = ev => { if(entrySaving) return; if((ev.button !== undefined && ev.button !== 0) || ev.target.closest('button')) return; startY = ev.clientY; dy = 0; sheet.style.transition = 'none'; ev.currentTarget.setPointerCapture?.(ev.pointerId); };
   const move = ev => { if(startY === null) return; dy = Math.max(0, ev.clientY - startY); sheet.style.transform = `translateY(${dy}px)`; };
   const up = ev => {
     if(startY === null) return;
@@ -1692,9 +1701,9 @@ function updateEntriesView(calc = computeMonth()){
   });
   const container = document.getElementById('entriesContainer');
   if(!container) return;
-  const dates = Object.keys(monthData.days).sort().reverse();
+  const dates = visibleDates(calc);
   container.classList.add('anim-list');
-  container.innerHTML = viewMode === 'calendar' ? buildCalendar(calc) : dates.length === 0 ? emptyStateHTML() : buildList(dates, calc);
+  container.innerHTML = viewMode === 'calendar' ? buildCalendar(calc) : dates.length === 0 ? (shiftSearch||shiftFilter!=='all'?'<div class="empty-state"><strong>לא נמצאו משמרות</strong><span>נסה חיפוש אחר או נקה את הסינון.</span></div>':emptyStateHTML()) : buildList(dates, calc);
   wireEntryInteractions();
 }
 
@@ -1797,6 +1806,7 @@ function updateEntryTypeUI(){
 
 let closeEntryTimer = null;
 function closeEntryEditor(){
+  if(entrySaving){showToast('ממתין לסיום השמירה');return;}
   const overlay = document.getElementById('entryEditorOverlay');
   if(!overlay || overlay.hidden || reducedMotion()) return finishCloseEntryEditor();
   overlay.classList.add('closing');
@@ -1814,6 +1824,12 @@ function finishCloseEntryEditor(){
 }
 
 function openEntryEditor(date = null, prefill = null){
+  entryOriginalDate = date;
+  entryEntrySnapshot = date ? deepClone(monthData.days[date] || null) : null;
+  $('#entryEditorTitle').textContent = date ? 'עריכת יום עבודה' : 'הוספת יום עבודה';
+  $('#duplicateEntryBtn').hidden = !date;
+  $('#entryHistoryBtn').hidden = !date;
+  $('#entryTemplateLabel').hidden = !!date || !!prefill;
   editorResolvesSession = !!(prefill && prefill.resolvesSession);
   $('#entryNote').value = ''; setEntryTag('');
   if(prefill){
@@ -1855,6 +1871,7 @@ function wireEntryInteractions(){
   wireSwipeRows();
   document.getElementById('emptyAddBtn')?.addEventListener('click', () => openEntryEditor());
   document.querySelectorAll('.entry-row').forEach(row => {
+    row.addEventListener('keydown',ev=>{if(ev.target===row&&(ev.key==='Enter'||ev.key===' ')){ev.preventDefault();openEntryEditor(row.dataset.date);}});
     row.addEventListener('click', (ev) => {
       if(ev.target.closest('.entry-del')) return;
       openEntryEditor(row.dataset.date);
@@ -1911,7 +1928,7 @@ function buildList(dates, calc){
     const chips = isSick
       ? `<span class="chip sick">מחלה · ${fmtHours(h.total)} ש׳</span>`
       : `${h.regular>0?`<span class="chip regular">${fmtHours(h.regular)}</span>`:''}${h.ot125>0?`<span class="chip ot125">${fmtHours(h.ot125)}</span>`:''}${h.ot150>0?`<span class="chip ot150">${fmtHours(h.ot150)}</span>`:''}`;
-    return `<div class="swipe-wrap"><div class="swipe-bg" aria-hidden="true">${ICONS.trash}מחק</div><div class="entry-row ${isSick ? 'sick-entry-row' : ''}" data-date="${date}" style="--i:${Math.min(idx, 14)}">
+    return `<div class="swipe-wrap"><div class="swipe-bg" aria-hidden="true">${ICONS.trash}מחק</div><div class="entry-row ${isSick ? 'sick-entry-row' : ''}" data-date="${date}" tabindex="0" role="button" aria-label="עריכת יום ${date}" style="--i:${Math.min(idx, 14)}">
       <div class="entry-row-top">
         <div class="entry-main">
           <div class="entry-date">${weekday} · ${day}.${String(currentDate.getMonth()+1).padStart(2,'0')}</div>
@@ -1946,9 +1963,10 @@ function buildCalendar(calc){
     const isToday = date === todayString;
     let cls = 'cal-cell';
     if(hasEntry) cls += ' has-entry';
+    if(hasEntry && !AttendanceRecords.matches(date,e,h,shiftSearch,shiftFilter)) cls += ' filtered-out';
     if(hasEntry && e.type === 'sick') cls += ' sick-day';
     if(isToday) cls += ' today';
-    cells += `<div class="${cls}" data-date="${date}" style="--i:${d};--heat:${hasEntry ? (e.type === 'sick' ? 0.35 : Math.min(1, h.total / refHours)).toFixed(2) : 0}">
+    cells += `<button type="button" class="${cls}" data-date="${date}" aria-label="עריכת ${date}" style="--i:${d};--heat:${hasEntry ? (e.type === 'sick' ? 0.35 : Math.min(1, h.total / refHours)).toFixed(2) : 0}">
       <span class="cal-day-num">${d}</span>${hasEntry && (e.note || e.tag) ? '<span class="cal-note-dot"></span>' : ''}
       ${hasEntry && e.type === 'sick' ? '<span class="cal-sick-mark">מ</span>' : ''}
       ${hasEntry ? `
@@ -1959,7 +1977,7 @@ function buildCalendar(calc){
         </div>
         <span class="cal-hours">${fmtHours(h.total)}</span>
       ` : ''}
-    </div>`;
+    </button>`;
   }
 
   return `
@@ -1976,6 +1994,7 @@ function escapeHtml(str){
 
 async function onAddEntry(ev){
   ev.preventDefault();
+  if(entrySaving) return;
   const date = $('#entryDate').value;
   const type = $('#entryType').value || 'work';
   const inT = $('#entryIn').value;
@@ -1992,12 +2011,18 @@ async function onAddEntry(ev){
 
   const submitBtn = ev.submitter || document.querySelector('#entryForm button[type="submit"]');
   if(submitBtn) submitBtn.disabled = true;
+  entrySaving = true;
   const entry = type === 'sick' ? { type:'sick' } : { type:'work', in:inT, out:outT, brk };
   const note = ($('#entryNote').value || '').trim().slice(0, 80);
   if(note) entry.note = note;
   if(type === 'work' && entryTagValue) entry.tag = entryTagValue;
   try{
-    await mutateMonth(date.slice(0, 7), m => { m.days[date] = entry; });
+    await mutateMonth(date.slice(0, 7), m => {
+      const existing=m.days[date]||null;
+      if(entryOriginalDate!==date && existing) throw Object.assign(new Error('Existing date'),{userMessage:'כבר קיים רישום לתאריך הזה. פתח אותו לעריכה.'});
+      if(entryOriginalDate===date && !AttendanceRecords.equal(existing,entryEntrySnapshot)) throw Object.assign(new Error('Entry changed'),{userMessage:'הרישום השתנה במכשיר אחר. פתח אותו מחדש לפני שמירה.'});
+      m.days[date] = entry;
+    });
     if(editorResolvesSession && activeSession) await closeActiveSession(activeSession);
     editorResolvesSession = false;
     if(date.slice(0, 7) !== monthKey(currentDate)){
@@ -2013,6 +2038,7 @@ async function onAddEntry(ev){
     console.error('save entry failed', e);
     showToast(e.userMessage || 'השמירה נכשלה. בדוק חיבור ונסה שוב.');
   }finally{
+    entrySaving = false;
     if(submitBtn) submitBtn.disabled = false;
   }
 }
@@ -2032,6 +2058,7 @@ async function savePayslipComparison(){
   const ok = await kvSet(`payslip:${monthKey(currentDate)}`, next);
   if(!ok){ showToast('שגיאה בשמירת ההשוואה'); return; }
   payslipActual = next;
+  payslipDirty=false;payslipDraft=null;
   writeInitialCache(currentUserId);
   render();
   showToast('ההשוואה לתלוש נשמרה');
@@ -2042,6 +2069,7 @@ async function clearPayslipComparison(){
   const ok = await kvSet(`payslip:${monthKey(currentDate)}`, empty);
   if(!ok){ showToast('שגיאה בניקוי ההשוואה'); return; }
   payslipActual = empty;
+  payslipDirty=false;payslipDraft=null;
   writeInitialCache(currentUserId);
   render();
   showToast('ההשוואה נוקתה');
@@ -2049,6 +2077,7 @@ async function clearPayslipComparison(){
 
 let monthChangeBusy = false;
 async function changeMonth(delta){
+  if(payslipDirty){showToast('שמור או בטל את השינויים בהשוואה לתלוש לפני מעבר חודש');return;}
   if(monthChangeBusy || shiftActionBusy || plannerOpen || plannerSaving) return;
   monthChangeBusy = true;
   const target = new Date(currentDate.getFullYear(), currentDate.getMonth()+delta, 1);
@@ -2131,9 +2160,12 @@ function updateThemeButtonsUI(){
 }
 
 function openSettings(){
+  document.querySelectorAll('#settingsDrawer .set-group').forEach(el=>el.open=false);
   settingsDraft = deepClone(settings);
+  settingsDirty = false;
   plannerOpen = false;
   renderPlannerSettings();
+  $('#setHoursFormat').value = settings.hoursFormat || 'decimal';
   $('#setRate').value = settings.hourlyRate;
   $('#setRegularHours').value = settings.regularHours;
   $('#setSickDayHours').value = settings.sickDayHours ?? 0;
@@ -2161,6 +2193,7 @@ function openSettings(){
 function closeSettings(){
   if(settingsSaving || plannerSaving) return;
   settingsDraft = null;
+  settingsDirty = false;
   plannerOpen = false;
   $('#settingsDrawer').classList.remove('open');
   document.body.classList.remove('settings-open');
@@ -2225,10 +2258,12 @@ document.addEventListener('keydown', (ev) => {
   if(ev.key === 'Escape' && $('#settingsDrawer').classList.contains('open')) closeSettings();
 });
 $('#addDeduction').addEventListener('click', () => {
+  settingsDirty=true;
   settingsDraft.deductions.push({ id: 'd'+Date.now(), name:'רכיב חדש', percent:0 });
   renderDeductionRows();
 });
 $('#addAddition').addEventListener('click', () => {
+  settingsDirty=true;
   settingsDraft.additions.push({ id: 'a'+Date.now(), name:'תוספת חדשה', amount:0 });
   renderAdditionRows();
 });
@@ -2236,6 +2271,7 @@ $('#saveSettings').addEventListener('click', async () => {
   if(settingsSaving) return;
   const num = id => Number($(id).value);
   const next = {
+    hoursFormat: $('#setHoursFormat').value === 'clock' ? 'clock' : 'decimal',
     hourlyRate: num('#setRate'),
     regularHours: num('#setRegularHours'),
     sickDayHours: num('#setSickDayHours') || 0,
@@ -2283,7 +2319,7 @@ $('#saveSettings').addEventListener('click', async () => {
   finally{ settingsSaving = false; $('#saveSettings').disabled = false; }
 });
 $('#resetData').addEventListener('click', async () => {
-  if(!confirm('לאפס את כל נתוני הנוכחות והשכר לחודש הנוכחי? פעולה זו לא ניתנת לביטול.')) return;
+  if(!confirm('למחוק את רישומי החודש המוצג? אפשר לשחזר רישומים מההיסטוריה.')) return;
   try{
     await mutateMonth(monthKey(currentDate), m => { m.days = {}; });
   }catch(e){
@@ -2419,6 +2455,7 @@ function showReadyApp(){
   animateNext = true;
   render();
   startShiftTicker();
+  if(window.showReleaseNotesOnce) window.showReleaseNotesOnce();
 }
 
 async function startApp(session){
@@ -2474,6 +2511,11 @@ function resetSignedOutState(){
     Object.keys(localStorage).filter(k => k.startsWith('nc_initial:')).forEach(k => localStorage.removeItem(k));
   }catch(e){ /* localStorage unavailable */ }
   currentUserId = null;
+  for(const id of ['historyOverlay','reportReady']){const el=document.getElementById(id);if(el)el.hidden=true;}
+  document.getElementById('historyBody')?.replaceChildren();
+  for(const id of ['sharePdfBtn','downloadPdfBtn']){const el=document.getElementById(id);if(el)el.onclick=null;}
+  settingsDirty=false;payslipDirty=false;payslipDraft=null;
+  lastSavedAt=null;lastSaveState='idle';
   settingsDraft = null;
   settingsSaving = false;
   plannerOpen = false;
@@ -2536,4 +2578,5 @@ async function bootstrap(){
   });
 }
 
+initEnhancements();
 void bootstrap();

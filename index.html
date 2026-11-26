@@ -48,7 +48,8 @@ if ('serviceWorker' in navigator) {
 </script>
 <link rel="dns-prefetch" href="//ojzemdselyxxscbbvssm.supabase.co">
 <link rel="preconnect" href="https://ojzemdselyxxscbbvssm.supabase.co" crossorigin>
-<link rel="stylesheet" href="styles.css?v=attendance-v21">
+<link rel="stylesheet" href="styles.css?v=2.0.0-b22">
+<link rel="stylesheet" href="professional.css?v=2.0.0-b22">
 </head>
 <body>
 <div class="initial-splash" id="initialSplash" aria-live="polite">
@@ -78,7 +79,7 @@ if ('serviceWorker' in navigator) {
   <div class="top-progress" id="topProgress" aria-hidden="true"></div>
   <div class="ptr" id="ptr" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></svg></div>
   <header class="topbar">
-    <button class="icon-btn" id="signOutBtn" aria-label="התנתקות" title="התנתקות"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/></svg></button>
+    <button type="button" id="syncStatus" class="sync-status" aria-live="polite">מחובר לחשבון</button>
     <div class="brand">
       <div>
         <h1>נוכחות+</h1>
@@ -90,6 +91,11 @@ if ('serviceWorker' in navigator) {
   </header>
 
   <main id="mainContent"></main>
+  <nav class="tab-bar bottom-nav" aria-label="ניווט ראשי" data-active="today">
+    <button type="button" data-tab="today" class="tab-btn active" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>היום</span></button>
+    <button type="button" data-tab="shifts" class="tab-btn"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4M17 3v4M3 11h18M8 15h2M14 15h2"/></svg><span>משמרות</span></button>
+    <button type="button" data-tab="insights" class="tab-btn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M12 20V4M20 20v-7"/></svg><span>סיכום</span></button>
+  </nav>
 
   <aside class="settings-drawer" id="settingsDrawer" role="dialog" aria-modal="true" aria-label="הגדרות">
     <div class="settings-handle" aria-hidden="true"></div>
@@ -98,7 +104,7 @@ if ('serviceWorker' in navigator) {
       <button type="button" class="settings-close" id="settingsClose" aria-label="סגירת הגדרות">✕</button>
     </div>
 
-    <h3>מראה</h3>
+    <details class="set-group"><summary>מראה ותצוגה</summary>
     <div class="theme-mode-toggle">
       <button type="button" class="theme-mode-btn" data-mode="system"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>מערכת</button>
       <button type="button" class="theme-mode-btn" data-mode="dark"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>כהה</button>
@@ -110,7 +116,10 @@ if ('serviceWorker' in navigator) {
       <button type="button" class="accent-swatch" data-accent="teal" style="background:linear-gradient(155deg,#4db3ad,#2b8a86)" title="טורקיז כהה"></button>
     </div>
 
-    <details class="set-group" open><summary>שכר ושעות</summary>
+    <label>תצוגת שעות<select id="setHoursFormat"><option value="decimal">שעות עשרוניות · 53.9</option><option value="clock">שעות ודקות · 53:54</option></select></label>
+    </details>
+
+    <details class="set-group"><summary>שכר ושעות</summary>
     <label>שכר שעתי (₪)
       <input type="number" id="setRate" step="0.01">
     </label>
@@ -182,19 +191,35 @@ if ('serviceWorker' in navigator) {
     <p class="settings-note">תזכורות היציאה נקבעות רק אחרי שנכנסת למשמרת ומתבטלות מיד כשאתה מחתים יציאה.</p>
     </details>
 
-    <button id="saveSettings" type="button">שמור הגדרות</button>
-    <button id="resetData" type="button">איפוס כל הנתונים</button>
-    <p class="settings-note">כל הנתונים נשמרים בחשבון שלך בענן ולא רק על המכשיר — הם יהיו זמינים מכל מכשיר שבו תתחבר.</p>
-    <p class="settings-note">גרסה 21</p>
+    <div class="settings-save"><button id="saveSettings" type="button">שמור הגדרות</button></div>
+    <details class="set-group"><summary>חשבון ונתונים</summary>
+      <p class="settings-note">הרישומים נשמרים בחשבון האישי שלך בענן.</p>
+      <button id="signOutBtn" type="button" class="account-signout">התנתקות מהחשבון</button>
+      <button id="resetData" type="button">איפוס רישומי החודש המוצג</button>
+    </details>
+
+    <details class="set-group"><summary>אודות ועדכונים</summary>
+      <div class="about-app"><img src="icon-192.png" alt="" width="64" height="64"><h3>נוכחות+</h3><p data-app-version></p></div>
+      <button type="button" id="whatsNewBtn">מה חדש בגרסה</button><button type="button" id="checkUpdatesBtn">בדיקת עדכונים</button><p id="updateStatus" class="settings-note" role="status"></p>
+    </details>
   </aside>
   <div class="drawer-overlay" id="drawerOverlay" hidden></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div id="historyOverlay" class="pro-overlay" hidden><section class="pro-sheet" role="dialog" aria-modal="true" aria-labelledby="historyTitle"><div class="pro-sheet-head"><h2 id="historyTitle">היסטוריית שינויים</h2><button id="historyClose" type="button" aria-label="סגירה">✕</button></div><div id="historyBody"></div></section></div>
+  <div id="reportReady" class="pro-overlay" hidden><section class="pro-sheet report-ready" role="dialog" aria-modal="true" aria-labelledby="reportReadyTitle"><div class="pro-sheet-head"><h2 id="reportReadyTitle">הדוח מוכן</h2><button id="closeReportReady" type="button" aria-label="סגירה">✕</button></div><p id="reportReadyName"></p><p>דוח נוכחות חודשי עם פירוט שעות ושכר משוער.</p><button id="sharePdfBtn" type="button">שיתוף הדוח</button><button id="downloadPdfBtn" type="button">הורדת PDF</button></section></div>
 </div>
+<aside id="updateBanner" class="update-banner" hidden role="status"><div><strong>עדכון חדש מוכן</strong><span>התקנה קצרה, הרישומים נשמרים בחשבון שלך.</span></div><button type="button" id="installUpdateBtn">עדכן עכשיו</button></aside>
+<div id="releaseNotes" class="pro-overlay" hidden><section class="pro-sheet" role="dialog" aria-modal="true" aria-labelledby="releaseNotesTitle"><div class="pro-sheet-head"><h2 id="releaseNotesTitle">מה חדש</h2><button id="closeReleaseNotes" type="button" aria-label="סגירה">✕</button></div><p data-app-version></p><ul></ul></section></div>
 
 <script src="vendor/supabase.js"></script>
 <script src="calc.js?v=attendance-calc-v10"></script>
 <script src="planner.js?v=2"></script>
-<script src="planner-ui.js?v=4"></script>
-<script src="app.js?v=attendance-v21"></script>
+<script src="planner-ui.js?v=2.0.0-b22"></script>
+<script src="release.js?v=2.0.0-b22"></script>
+<script src="records.js?v=2.0.0-b22"></script>
+<script src="report.js?v=2.0.0-b22"></script>
+<script src="enhancements.js?v=2.0.0-b22"></script>
+<script src="updates.js?v=2.0.0-b22"></script>
+<script src="app.js?v=2.0.0-b22"></script>
 </body>
 </html>

@@ -31,7 +31,7 @@ test('cancelled sheet drag restores the sheet without dismissing the editor',()=
   const handlers={};let closed=false;
   const handle={setPointerCapture(){},addEventListener(type,fn){handlers[type]=fn}};
   const sheet={style:{}};const overlay={querySelector:()=>sheet,querySelectorAll:()=>[handle]};
-  const c=vm.createContext({document:{getElementById:()=>overlay},setTimeout(){closed=true},clearTimeout(){},finishCloseEntryEditor(){closed=true},closeEntryTimer:null});
+  const c=vm.createContext({document:{getElementById:()=>overlay},setTimeout(){closed=true},clearTimeout(){},finishCloseEntryEditor(){closed=true},closeEntryTimer:null,entrySaving:false});
   vm.runInContext(part('function wireSheetDrag(', '// Pull down at the top'),c);c.wireSheetDrag();
   handlers.pointerdown({clientY:0,button:0,target:{closest:()=>null},currentTarget:handle});handlers.pointermove({clientY:160});handlers.pointercancel({type:'pointercancel'});
   assert.equal(closed,false);assert.equal(sheet.style.transform,'');

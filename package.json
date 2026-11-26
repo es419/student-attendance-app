@@ -1,9 +1,15 @@
 {
   "name": "student-attendance-app",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "נוכחות+ — PWA for tracking work hours and estimated pay",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "release:build": "node scripts/release.cjs",
+    "release:check": "node scripts/release.cjs --check",
+    "test:browser": "node scripts/browser-smoke.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
   }
 }

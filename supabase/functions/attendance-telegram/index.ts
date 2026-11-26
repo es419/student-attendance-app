@@ -39,7 +39,7 @@ type ActiveSession = {
   breaks: Array<{ start: string; end: string | null; reminderId?: string }>;
 };
 
-type MonthData = { days: Record<string, { in?: string; out?: string; brk?: number; type?: 'work' | 'sick'; note?: string; tag?: string }> };
+type MonthData = { days: Record<string, { in?: string; out?: string; brk?: number; type?: 'work' | 'sick'; note?: string; tag?: string }>; history?: Array<{id:string;date:string;at:string;source:string;before:unknown;after:unknown}> };
 
 // Constant-time string comparison (avoids leaking the secret through timing).
 function safeEqual(a: string, b: string) {
@@ -362,6 +362,10 @@ async function performAction(userId: string, action: string) {
       return "כבר קיים רישום אחר לתאריך הזה. המשמרת נשארה פתוחה; יש לתקן את הרישום באפליקציה.";
     }
     monthData.days[session.date] = { ...existing, type: 'work', in: checkin, out: checkout, brk: totalBreak };
+    const nextEntry=monthData.days[session.date];
+    if(JSON.stringify(existing??null)!==JSON.stringify(nextEntry)){
+      monthData.history=[...(monthData.history??[]),{id:`${Date.now()}-${Math.random().toString(36).slice(2)}`,date:session.date,at:new Date().toISOString(),source:'telegram',before:existing??null,after:nextEntry}].slice(-500);
+    }
     await setKv(userId, key, monthData);
     await finishSession();
     return `סיימת את המשמרת ב-${checkout} 🔴`;
