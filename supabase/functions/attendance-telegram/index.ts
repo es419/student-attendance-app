@@ -39,7 +39,7 @@ type ActiveSession = {
   breaks: Array<{ start: string; end: string | null; reminderId?: string }>;
 };
 
-type MonthData = { days: Record<string, { in?: string; out?: string; brk?: number; type?: 'work' | 'sick' }> };
+type MonthData = { days: Record<string, { in?: string; out?: string; brk?: number; type?: 'work' | 'sick'; note?: string; tag?: string }> };
 
 // Constant-time string comparison (avoids leaking the secret through timing).
 function safeEqual(a: string, b: string) {
@@ -294,6 +294,7 @@ async function performAction(userId: string, action: string) {
 
   if (action === "clock_in") {
     if (session) return "כבר קיימת משמרת פעילה.";
+    if (state.monthData.days?.[now.date]) return "כבר קיים רישום להיום. אפשר לערוך אותו באפליקציה, בלי לדרוס אותו בכניסה נוספת.";
     session = { date: now.date, checkIn: now.time, breaks: [] };
     await setKv(userId, "activeSession", session);
     await cancelAttendanceReminders(userId, [ATTENDANCE_REMINDER_MESSAGES.checkIn]);
@@ -330,18 +331,23 @@ async function performAction(userId: string, action: string) {
       return "המשמרת פתוחה כבר מעל 16 שעות. פתח את נוכחות+ והזן את שעת היציאה האמיתית.";
     }
     const checkin = session.checkIn;
-    const startedBreak = isOnBreak(session);
     const totalBreak = breakMinutes(session, checkout);
-
-    await cancelAttendanceReminders(userId, [
-      ATTENDANCE_REMINDER_MESSAGES.checkOut,
-      ATTENDANCE_REMINDER_MESSAGES.checkOutRepeat,
-    ]);
-    if (startedBreak) await cancelReminder(session.breaks[session.breaks.length - 1].reminderId);
+    const finishSession = async () => {
+      await deleteKv(userId, "activeSession");
+      try {
+        await cancelAttendanceReminders(userId, [
+          ATTENDANCE_REMINDER_MESSAGES.checkOut,
+          ATTENDANCE_REMINDER_MESSAGES.checkOutRepeat,
+        ]);
+        for (const b of session.breaks) await cancelReminder(b.reminderId);
+      } catch (error) {
+        console.error("Reminder cleanup failed after clock-out", error);
+      }
+    };
 
     if (elapsed < 1) {
       // in and out within the same minute: an accidental tap, not a shift
-      await deleteKv(userId, "activeSession");
+      await finishSession();
       return "המשמרת נמשכה פחות מדקה ולא נשמרה.";
     }
 
@@ -351,9 +357,13 @@ async function performAction(userId: string, action: string) {
     const rows = key === state.monthKey ? { [key]: state.monthData } : await getKv(userId, [key]);
     const monthData = (rows[key] ?? { days: {} }) as MonthData;
     if (!monthData.days) monthData.days = {};
-    monthData.days[session.date] = { in: checkin, out: checkout, brk: totalBreak };
+    const existing = monthData.days[session.date];
+    if (existing && (existing.type === 'sick' || existing.in !== checkin)) {
+      return "כבר קיים רישום אחר לתאריך הזה. המשמרת נשארה פתוחה; יש לתקן את הרישום באפליקציה.";
+    }
+    monthData.days[session.date] = { ...existing, type: 'work', in: checkin, out: checkout, brk: totalBreak };
     await setKv(userId, key, monthData);
-    await deleteKv(userId, "activeSession");
+    await finishSession();
     return `סיימת את המשמרת ב-${checkout} 🔴`;
   }
 

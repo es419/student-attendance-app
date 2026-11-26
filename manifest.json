@@ -30,5 +30,31 @@
   "categories": [
     "productivity",
     "utilities"
+  ],
+  "shortcuts": [
+    {
+      "name": "כניסה למשמרת",
+      "short_name": "כניסה",
+      "url": "./?action=clockin",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "סיום משמרת",
+      "short_name": "יציאה",
+      "url": "./?action=clockout",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
   ]
 }

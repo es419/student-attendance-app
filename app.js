@@ -48,7 +48,7 @@ let currentDate = new Date();
 let monthData = { days: {} }; // { "YYYY-MM-DD": { type, in, out, brk } }
 let payslipActual = { gross: null, net: null };
 let viewMode = 'list'; // 'calendar' | 'list'
-let activeTab = 'today'; // 'today' | 'shifts'
+let activeTab = 'today'; // 'today' | 'shifts' | 'insights'
 let payslipOpen = false;
 let activeSession = null; // { date, checkIn, breaks:[{start,end|null}] } — persisted while a shift is running
 let currentUserId = null;
@@ -86,6 +86,24 @@ function writeInitialCache(userId){
   }catch(e){ /* cache is best-effort */ }
 }
 const softHaptic = () => { try{ if(navigator.vibrate) navigator.vibrate(8); }catch(e){} };
+const ICONS = {
+  login: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>',
+  logout: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
+  coffee: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 8h1a4 4 0 0 1 0 8h-1M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4ZM6 2v2M10 2v2M14 2v2"/></svg>',
+  play: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4l14 8-14 8Z"/></svg>',
+  trash: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg>',
+  edit: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  warn: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0ZM12 9v4M12 17h.01"/></svg>',
+  chart: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18M8 17v-6M13 17V7M18 17v-4"/></svg>',
+  folder: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>',
+  phone: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>',
+  moon: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>',
+  sun: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>'
+};
+const TAG_LABELS = { remote:'מהבית', holiday:'בחג' };
+// One-shot animation flags: render() rebuilds the whole screen, so animations are tied to events, never to existence.
+let animateNext = false, transitionNext = false, lastNetShown = null, entryTagValue = '';
+const reducedMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
 function todayStr(){
   const d = new Date();
@@ -645,35 +663,52 @@ if(window.matchMedia){
   });
 }
 
-async function saveSettingsToStorage(){
+async function saveSettingsToStorage(next = settings){
+  // Keep the current screen/cache authoritative until the server accepts the draft.
+  const userId = currentUserId;
+  const latest = normalizeSettings(await kvGetStrict('settings'));
+  if(userId !== currentUserId) throw new Error('Account changed during settings save');
+  const merged = { ...latest, ...next, workPlan: latest.workPlan };
+  if(!await kvSet('settings', merged)) throw new Error('Failed to save settings');
+  if(userId !== currentUserId) throw new Error('Account changed during settings save');
+  settings = merged;
   writeInitialCache(currentUserId);
-  const ok = await kvSet('settings', settings);
   applyTheme();
-  showToast(ok ? 'ההגדרות נשמרו' : 'שגיאה בשמירת ההגדרות');
 }
 
 async function loadMonth(d){
   const mk = monthKey(d);
+  const userId = currentUserId;
   // strict reads: a network error must not look like an empty month
   const [saved, savedPayslip] = await Promise.all([kvGetStrict(`attendance:${mk}`), kvGetStrict(`payslip:${mk}`)]);
+  if(userId !== currentUserId || mk !== monthKey(currentDate)) return false;
   monthData = saved || { days:{} };
   payslipActual = normalizePayslip(savedPayslip);
+  return true;
 }
 
-// Read-modify-write against the freshest server copy, so an edit made from another
-// device or the Telegram bot is never overwritten by a stale local snapshot.
+// Serialize edits in this tab and re-read the server before each write. Separate
+// devices still need a server-side transaction for fully atomic concurrent edits.
 async function mutateMonth(mk, mutator){
-  const key = `attendance:${mk}`;
-  const latest = (await kvGetStrict(key)) || { days:{} };
-  if(!latest.days || typeof latest.days !== 'object') latest.days = {};
-  mutator(latest);
-  const ok = await kvSet(key, latest);
-  if(!ok) throw new Error('failed to save month');
-  if(mk === monthKey(currentDate)){
-    monthData = latest;
-    writeInitialCache(currentUserId);
-  }
-  return latest;
+  const userId = currentUserId;
+  const run = async () => {
+    if(!userId || userId !== currentUserId) throw new Error('Account changed before month edit');
+    const key = `attendance:${mk}`;
+    const latest = (await kvGetStrict(key)) || { days:{} };
+    if(userId !== currentUserId) throw new Error('Account changed during month edit');
+    if(!latest.days || typeof latest.days !== 'object') latest.days = {};
+    mutator(latest);
+    const ok = await kvSet(key, latest);
+    if(!ok) throw new Error('failed to save month');
+    if(userId === currentUserId && mk === monthKey(currentDate)){
+      monthData = latest;
+      writeInitialCache(userId);
+    }
+    return latest;
+  };
+  const pending = (mutateMonth.pending || Promise.resolve()).then(run);
+  mutateMonth.pending = pending.catch(() => {});
+  return pending;
 }
 
 // ---- active shift (quick clock in/out + break) ----
@@ -681,8 +716,9 @@ async function mutateMonth(mk, mutator){
 async function loadInitialData(userId = currentUserId){
   if(!userId) throw new Error('No authenticated user');
 
-  const monthDataKey = `attendance:${monthKey(currentDate)}`;
-  const payslipKey = `payslip:${monthKey(currentDate)}`;
+  const requestedMonth = monthKey(currentDate);
+  const monthDataKey = `attendance:${requestedMonth}`;
+  const payslipKey = `payslip:${requestedMonth}`;
   const { data: rows, error } = await supabaseClient
     .from('kv_store')
     .select('key, value')
@@ -690,6 +726,7 @@ async function loadInitialData(userId = currentUserId){
     .in('key', ['settings', monthDataKey, payslipKey, 'activeSession']);
 
   if(error) throw error;
+  if(userId !== currentUserId || requestedMonth !== monthKey(currentDate)) return false;
 
   const byKey = Object.fromEntries((rows || []).map(row => [row.key, row.value]));
   settings = normalizeSettings(byKey.settings);
@@ -699,17 +736,19 @@ async function loadInitialData(userId = currentUserId){
   activeSession = byKey.activeSession || null;
   applyTheme();
   writeInitialCache(userId);
+  return true;
 }
 
 async function saveActiveSession(){
-  writeInitialCache(currentUserId);
   if(activeSession){
     const ok = await kvSet('activeSession', activeSession);
     if(!ok) showToast('שגיאה בשמירת סטטוס המשמרת');
+    if(ok) writeInitialCache(currentUserId);
     return ok;
   }
   const ok = await kvDelete('activeSession');
   if(!ok) showToast('שגיאה בסגירת המשמרת. רענן ונסה שוב');
+  if(ok) writeInitialCache(currentUserId);
   return ok;
 }
 
@@ -733,12 +772,13 @@ async function syncActiveSessionFromCloud(){
     .eq('key', 'activeSession')
     .maybeSingle();
   if(error) throw error;
+  if(userId !== currentUserId) throw new Error('Account changed during sync');
   activeSession = data ? data.value : null;
   writeInitialCache(userId);
 }
 
 async function runShiftAction(action){
-  if(shiftActionBusy) return;
+  if(shiftActionBusy || monthChangeBusy) return;
   shiftActionBusy = true;
   updateShiftBusy();
   // Capture the moment of the press now: the network round-trips below must never
@@ -748,12 +788,14 @@ async function runShiftAction(action){
     // Telegram and another device can change the shift while this PWA is asleep.
     // Re-read the authoritative active session before every attendance mutation.
     await syncActiveSessionFromCloud();
+    transitionNext = true; // the next render() morphs smoothly
     await action(stamp);
   }catch(e){
     console.error('shift action failed', e);
-    showToast('הפעולה לא נשמרה. בדוק חיבור ונסה שוב.');
+    showToast(e.userMessage || 'הפעולה לא נשמרה. בדוק חיבור ונסה שוב.');
     render();
   }finally{
+    transitionNext = false;
     shiftActionBusy = false;
     updateShiftBusy();
   }
@@ -761,13 +803,18 @@ async function runShiftAction(action){
 
 // Ends the running shift: cancels its pending reminders and removes it from the cloud.
 async function closeActiveSession(session){
+  // A failed delete must leave the shift active and must never report success.
+  if(!await kvDelete('activeSession')) throw Object.assign(new Error('Failed to close active shift'), {
+    userMessage:'סגירת המשמרת נכשלה. היא עדיין פתוחה; בדוק חיבור ונסה שוב.'
+  });
+  activeSession = null;
+  writeInitialCache(currentUserId);
   await cancelAttendanceReminderMessages([
     ATTENDANCE_REMINDER_MESSAGES.checkOut,
     ATTENDANCE_REMINDER_MESSAGES.checkOutRepeat
   ]);
   for(const b of (session.breaks || [])) await cancelBreakReminder(b.reminderId);
-  activeSession = null;
-  return saveActiveSession();
+  return true;
 }
 
 async function clockIn(earlier = null){
@@ -781,10 +828,11 @@ async function clockIn(earlier = null){
     if(earlier){
       const error = AttendanceCalc.earlierEntryError(earlier.date, earlier.time, stamp.at);
       if(error){showToast(error);return;}
-      const saved = await kvGetStrict(`attendance:${earlier.date.slice(0,7)}`);
-      if(saved?.days?.[earlier.date]){showToast('כבר קיימת משמרת בתאריך הזה. אפשר לערוך אותה במסך משמרות');return;}
     }
-    activeSession = { date: earlier ? earlier.date : stamp.date, checkIn: earlier ? earlier.time : stamp.time, breaks: [] };
+    const date = earlier ? earlier.date : stamp.date;
+    const saved = await kvGetStrict(`attendance:${date.slice(0,7)}`);
+    if(saved?.days?.[date]){showToast('כבר קיים רישום בתאריך הזה. אפשר לערוך אותו במסך משמרות');return;}
+    activeSession = { date, checkIn: earlier ? earlier.time : stamp.time, breaks: [] };
     if(!(await saveActiveSession())){ activeSession = null; render(); return; }
     try{
       await cancelAttendanceReminderMessages([ATTENDANCE_REMINDER_MESSAGES.checkIn]);
@@ -854,7 +902,15 @@ async function clockOut(){
     // Save the day first; only then close the running shift. If the save fails the
     // shift stays open and nothing is lost. A shift that crosses midnight is kept.
     const mk = date.slice(0, 7);
-    const latest = await mutateMonth(mk, m => { m.days[date] = { in: checkIn, out: checkOut, brk: totalBreakMin }; });
+    const latest = await mutateMonth(mk, m => {
+      const existing = m.days[date];
+      if(existing && (existing.type === 'sick' || existing.in !== checkIn)){
+        throw Object.assign(new Error('Conflicting day entry'), {
+          userMessage:'כבר קיים רישום אחר ליום הזה. המשמרת נשארה פתוחה; תקן את הרישום במסך משמרות.'
+        });
+      }
+      m.days[date] = { ...existing, type:'work', in: checkIn, out: checkOut, brk: totalBreakMin };
+    });
     await closeActiveSession(activeSession);
 
     if(mk !== monthKey(currentDate)){
@@ -893,7 +949,7 @@ function buildShiftWidget(){
   if(!activeSession){
     return `
       <section class="shift-widget idle">
-        ${lpButton('clockInBtn','','🟢 כניסה עכשיו')}
+        ${lpButton('clockInBtn','',ICONS.login+'כניסה עכשיו')}
         <button type="button" id="earlierEntryToggle" class="earlier-link" aria-expanded="${!!earlierEntryDraft}" aria-controls="earlierEntryForm">הגעתי קודם</button>
         <form id="earlierEntryForm" class="earlier-entry" ${earlierEntryDraft ? '' : 'hidden'}>
           <label for="earlierEntryTime">היום בשעה</label>
@@ -908,11 +964,11 @@ function buildShiftWidget(){
     const since = `${activeSession.date.slice(8,10)}.${activeSession.date.slice(5,7)} ${activeSession.checkIn}`;
     return `
       <section class="shift-widget stale">
-        <div class="shift-status">⚠️ משמרת פתוחה מאז ${since}</div>
+        <div class="shift-status">${ICONS.warn} משמרת פתוחה מאז ${since}</div>
         <p class="stale-text">נראה ששכחת להחתים יציאה. הזן את שעת היציאה האמיתית או בטל את המשמרת.</p>
         <div class="shift-actions">
-          <button id="resolveStaleBtn" class="shift-btn" type="button">✏️ הזן יציאה</button>
-          ${lpButton('discardStaleBtn','secondary','🗑️ בטל משמרת')}
+          <button id="resolveStaleBtn" class="shift-btn" type="button">${ICONS.edit} הזן יציאה</button>
+          ${lpButton('discardStaleBtn','secondary',ICONS.trash+'בטל משמרת')}
         </div>
         <p class="lp-hint">ביטול משמרת דורש לחיצה ארוכה</p>
       </section>`;
@@ -921,22 +977,23 @@ function buildShiftWidget(){
     const b = activeSession.breaks[activeSession.breaks.length-1];
     return `
       <section class="shift-widget on-break">
-        <div class="shift-status">☕ בהפסקה מהשעה ${b.start}</div>
+        <div class="shift-status">${ICONS.coffee}בהפסקה מהשעה ${b.start}</div>
         <p id="departureHint" class="departure-hint" aria-live="off">${departureHint()}</p>
         <div class="shift-actions">
-          ${lpButton('endBreakBtn','','🟢 חזרה מהפסקה')}
-          ${lpButton('clockOutBtn','secondary','🔴 סיום משמרת')}
+          ${lpButton('endBreakBtn','',ICONS.play+'חזרה מהפסקה')}
+          ${lpButton('clockOutBtn','secondary',ICONS.logout+'סיום משמרת')}
         </div>
         <p class="lp-hint">החזיקו לחיצה כדי לאשר</p>
       </section>`;
   }
   return `
     <section class="shift-widget active">
-      <div class="shift-status">🟠 במשמרת מהשעה ${activeSession.checkIn} <span id="shiftElapsed" class="mono"></span></div>
+      <div class="shift-status"><span class="live-dot" aria-hidden="true"></span>במשמרת מהשעה ${activeSession.checkIn}</div>
+      <div id="shiftElapsed" class="shift-timer mono"></div>
       <p id="departureHint" class="departure-hint" aria-live="off">${departureHint()}</p>
       <div class="shift-actions">
-        ${lpButton('startBreakBtn','','☕ יציאה להפסקה')}
-        ${lpButton('clockOutBtn','secondary','🔴 סיום משמרת')}
+        ${lpButton('startBreakBtn','',ICONS.coffee+'יציאה להפסקה')}
+        ${lpButton('clockOutBtn','secondary',ICONS.logout+'סיום משמרת')}
       </div>
       <p class="lp-hint">החזיקו לחיצה כדי לאשר</p>
     </section>`;
@@ -954,36 +1011,32 @@ function tickShiftTimer(){
   const el = document.getElementById('shiftElapsed');
   if(!el || !activeSession || isOnBreak()) return;
   const diffMin = AttendanceCalc.netElapsedMinutes(activeSession, Date.now());
-  el.textContent = `· חלפו ${Math.floor(diffMin/60)}ש׳ ${diffMin % 60}ד׳`;
+  el.textContent = `${Math.floor(diffMin/60)}:${String(diffMin % 60).padStart(2,'0')}`;
 }
 
 // ---- calculation (pure logic lives in calc.js) ----
 function computeMonth(monthDataArg){ return AttendanceCalc.computeMonth(monthDataArg || monthData, settings); }
 
 async function getAllMonthsData(){
-  try{
     const userId = currentUserId;
-    if(!userId) return {};
+    if(!userId) throw new Error('No authenticated user');
     const { data, error } = await supabaseClient
       .from('kv_store')
       .select('key, value')
       .eq('user_id', userId)
       .like('key', 'attendance:%');
     if(error) throw error;
+    if(userId !== currentUserId) throw new Error('Account changed during history load');
     const result = {};
     (data || []).forEach(row => {
       const mk = row.key.replace('attendance:', '');
-      result[mk] = row.value;
+      if(/^\d{4}-(0[1-9]|1[0-2])$/.test(mk)) result[mk] = row.value;
     });
     return result;
-  }catch(e){
-    console.error('getAllMonthsData error', e);
-    return {};
-  }
 }
 
 // ---- rendering ----
-const SHIFT_HEADER = ['תאריך','כניסה','יציאה','הפסקה (דק\')','חריגת הפסקה (דק\')','שעות רגילות','שעות 125%','שעות 150%','סה"כ שעות','סוג יום'];
+const SHIFT_HEADER = ['תאריך','כניסה','יציאה','הפסקה (דק\')','חריגת הפסקה (דק\')','שעות רגילות','שעות 125%','שעות 150%','סה"כ שעות','סוג יום','תגית','הערה'];
 function shiftSheetRows(md, calc){
   const dates = Object.keys(md.days || {}).sort();
   const rows = dates.map(date => {
@@ -992,13 +1045,14 @@ function shiftSheetRows(md, calc){
     return [
       date, e.in || '', e.out || '', e.brk || 0, Math.round(h.excessBreakMin),
       Number(h.regular.toFixed(2)), Number(h.ot125.toFixed(2)), Number(h.ot150.toFixed(2)),
-      Number(h.total.toFixed(2)), e.type === 'sick' ? 'מחלה' : 'עבודה'
+      Number(h.total.toFixed(2)), e.type === 'sick' ? 'מחלה' : 'עבודה',
+      TAG_LABELS[e.tag] || '', e.note || ''
     ];
   });
   const totals = [
     'סה"כ', '', '', '', Math.round(calc.excessBreakMinTotal),
     Number(calc.paidRegular.toFixed(2)), Number(calc.paidOt125.toFixed(2)), Number(calc.paidOt150.toFixed(2)),
-    Number(calc.rawTotal.toFixed(2)), ''
+    Number(calc.rawTotal.toFixed(2)), '', '', ''
   ];
   return [SHIFT_HEADER, ...rows, [], totals];
 }
@@ -1094,7 +1148,9 @@ async function exportAllHistoryToExcel(){
     return;
   }
   showToast('אוסף את כל ההיסטוריה…');
-  const allMonths = await getAllMonthsData();
+  let allMonths;
+  try{ allMonths = await getAllMonthsData(); }
+  catch(e){ console.error('history export failed', e); showToast('לא ניתן לטעון את ההיסטוריה לייצוא. בדוק חיבור ונסה שוב.'); return; }
   const monthKeys = Object.keys(allMonths).sort();
   if(monthKeys.length === 0){
     showToast('אין עדיין נתונים לייצוא');
@@ -1190,8 +1246,8 @@ document.addEventListener('focusout', () => setTimeout(flushPendingRender, 250))
 const dataFingerprint = () => JSON.stringify([settings, monthData, payslipActual, activeSession]);
 
 // Each tab remembers where it was scrolled to, like a native tab bar does.
-const tabScroll = { today: 0, shifts: 0 };
-const tabScroller = tab => document.querySelector(tab === 'today' ? '.today-body' : '#entriesContainer');
+const tabScroll = { today: 0, shifts: 0, insights: 0 };
+const tabScroller = tab => document.querySelector(tab === 'today' ? '.today-body' : tab === 'insights' ? '#mainContent' : '#entriesContainer');
 function saveTabScroll(tab = activeTab){
   const el = tabScroller(tab);
   if(el && el.offsetParent !== null) tabScroll[tab] = el.scrollTop; // hidden panels report 0
@@ -1202,6 +1258,16 @@ function restoreTabScroll(tab = activeTab){
 }
 
 function render(){
+  if(transitionNext && document.startViewTransition && !reducedMotion()){
+    transitionNext = false;
+    document.startViewTransition(() => renderNow());
+    return;
+  }
+  transitionNext = false;
+  renderNow();
+}
+
+function renderNow(){
   const main = $('#mainContent');
   saveTabScroll();
   main.classList.remove('editor-open');
@@ -1212,22 +1278,28 @@ function render(){
   const dates = Object.keys(monthData.days).sort().reverse();
 
   main.innerHTML = `
-    <div class="tab-bar">
+    <div class="tab-bar" data-active="${activeTab}">
       <button type="button" data-tab="today" class="tab-btn ${activeTab==='today'?'active':''}">היום</button>
       <button type="button" data-tab="shifts" class="tab-btn ${activeTab==='shifts'?'active':''}">משמרות</button>
+      <button type="button" data-tab="insights" class="tab-btn ${activeTab==='insights'?'active':''}">סיכום</button>
     </div>
 
     <div class="tab-panel" data-panel="today" ${activeTab!=='today' ? 'hidden' : ''}>
     ${buildShiftWidget()}
     <div class="today-body">
     <section class="ledger-card">
+      <div class="net-hero">
+        <span class="net-hero-label">נטו משוער החודש</span>
+        <span class="net-hero-value mono" id="netHero" data-value="${Math.round(calc.net)}">${fmtMoney(calc.net)}</span>
+        <span class="net-hero-sub">ברוטו ${fmtMoney(calc.gross)} · ${fmtHours(calc.rawTotal)} שעות</span>
+      </div>
       <div class="cap-label">
         <span>0</span>
         <span class="cap-remaining">${calc.capExceeded ? 'חריגה מהתקרה' : `נותרו ${fmtHours(Math.max(0, settings.monthlyCap - calc.rawTotal))} ש׳`}</span>
         <span>${settings.monthlyCap} שעות (תקרה)</span>
       </div>
       <div class="punch-strip">
-        <div class="punch-fill">
+        <div class="punch-fill${animateNext ? ' grow' : ''}">
           <span style="width:${Math.max(0,capPct-overPct)}%;background:var(--teal)"></span>
           <span style="width:${overPct}%;background:var(--rust)"></span>
         </div>
@@ -1243,7 +1315,7 @@ function render(){
       </div>
 
       ${calc.capExceeded ? `<div class="cap-warning">חרגת מ-${settings.monthlyCap} שעות החודש — כ-${fmtHours(calc.unpaid)} שעות לא ישולמו לפי החוזה.</div>` : ''}
-      ${calc.excessBreakMinTotal > 0 ? `<div class="break-note">☕ החודש נוכו ${Math.round(calc.excessBreakMinTotal)} דק׳ (${fmtHours(calc.excessBreakMinTotal/60)} ש׳) בגין חריגות הפסקה מעבר ל-${settings.freeBreakMinutes} הדק׳ הפטורות ליום.</div>` : ''}
+      ${calc.excessBreakMinTotal > 0 ? `<div class="break-note">${ICONS.coffee}החודש נוכו ${Math.round(calc.excessBreakMinTotal)} דק׳ (${fmtHours(calc.excessBreakMinTotal/60)} ש׳) בגין חריגות הפסקה מעבר ל-${settings.freeBreakMinutes} הדק׳ הפטורות ליום.</div>` : ''}
       ${calc.sickDays > 0 ? `<div class="sick-note">נכללו ${calc.sickDays} ימי מחלה (${fmtHours(calc.sickHours)} שעות), לפי התקן שהוגדר.</div>` : ''}
 
       <div class="pay-breakdown">
@@ -1273,6 +1345,7 @@ function render(){
 
     <div class="entry-editor-overlay" id="entryEditorOverlay" hidden>
     <section class="add-entry entry-editor" role="dialog" aria-modal="true" aria-labelledby="entryEditorTitle">
+      <div class="sheet-handle" aria-hidden="true"></div>
       <div class="entry-editor-head"><h2 id="entryEditorTitle">הוספת / עדכון יום עבודה</h2><button type="button" id="entryEditorClose" aria-label="סגירה">✕</button></div>
       <form id="entryForm">
         <label>תאריך <input type="date" id="entryDate" value="${todayStr()}"></label>
@@ -1287,7 +1360,9 @@ function render(){
           <label>שעת יציאה <input type="time" id="entryOut"></label>
           <label>הפסקה (דק') <input type="number" id="entryBreak" value="0" min="0" inputmode="numeric"></label>
         </div>
-        <p class="stale-note" id="staleNote" hidden>⚠️ משמרת שלא נסגרה — הזן את שעת היציאה האמיתית ושמור כדי לסגור אותה.</p>
+        <label class="entry-note-field">הערה (לא חובה) <input type="text" id="entryNote" maxlength="80" placeholder="למשל: ישיבת צוות"></label>
+        <div class="entry-tags" id="entryTags" role="group" aria-label="תגית ליום"><button type="button" data-tag="remote">מהבית</button><button type="button" data-tag="holiday">בחג</button></div>
+        <p class="stale-note" id="staleNote" hidden>${ICONS.warn} משמרת שלא נסגרה — הזן את שעת היציאה האמיתית ושמור כדי לסגור אותה.</p>
         <p class="sick-entry-note" id="sickDayNote" hidden>${Number(settings.sickDayHours) > 0 ? `מחלה: ${fmtHours(settings.sickDayHours)} שעות בתעריף רגיל, בתשלום מהיום הראשון.` : 'כדי להזין יום מחלה, הגדירו תחילה את שעות התקן בהגדרות.'}</p>
         <button type="submit">שמור יום</button>
       </form>
@@ -1298,18 +1373,22 @@ function render(){
       <div class="list-header">
         <h2>המשמרות שלי</h2>
         <div class="list-header-actions">
-          <button type="button" id="exportExcelBtn" class="export-btn" title="ייצוא החודש הנוכחי לאקסל">📊 החודש</button>
-          <button type="button" id="exportAllBtn" class="export-btn" title="ייצוא כל ההיסטוריה לאקסל">🗂️ הכל</button>
+          <button type="button" id="exportExcelBtn" class="export-btn" title="ייצוא החודש הנוכחי לאקסל">${ICONS.chart}החודש</button>
+          <button type="button" id="exportAllBtn" class="export-btn" title="ייצוא כל ההיסטוריה לאקסל">${ICONS.folder}הכל</button>
           <div class="view-toggle">
             <button type="button" data-view="calendar" class="${viewMode==='calendar'?'active':''}">לוח</button>
             <button type="button" data-view="list" class="${viewMode==='list'?'active':''}">רשימה</button>
           </div>
         </div>
       </div>
-      <div id="entriesContainer">
-        ${dates.length === 0 ? `<div class="empty-state">עדיין לא נרשמו ימי עבודה בחודש זה.<br>הוסיפו יום למעלה כדי להתחיל.</div>` : (viewMode === 'calendar' ? buildCalendar(calc) : buildList(dates, calc))}
+      <div id="entriesContainer" class="${animateNext ? 'anim-list' : ''}">
+        ${viewMode === 'calendar' ? buildCalendar(calc) : dates.length === 0 ? emptyStateHTML() : buildList(dates, calc)}
       </div>
     </section>
+    </div>
+
+    <div class="tab-panel" data-panel="insights" ${activeTab!=='insights' ? 'hidden' : ''}>
+      <div id="insightsBody"></div>
     </div>
   `;
 
@@ -1321,9 +1400,12 @@ function render(){
   $('#nextMonth').addEventListener('click', () => changeMonth(1));
   $('#entryForm').addEventListener('submit', onAddEntry);
   $('#entryType').addEventListener('change', updateEntryTypeUI);
+  document.querySelectorAll('#entryTags [data-tag]').forEach(b => b.addEventListener('click', () => setEntryTag(b.dataset.tag === entryTagValue ? '' : b.dataset.tag)));
+  setEntryTag(entryTagValue);
   $('#addEntryBtn').addEventListener('click', () => openEntryEditor());
   $('#entryEditorClose').addEventListener('click', closeEntryEditor);
   $('#entryEditorOverlay').addEventListener('click', ev => { if(ev.target.id === 'entryEditorOverlay') closeEntryEditor(); });
+  wireSheetDrag();
   $('#savePayslipBtn').addEventListener('click', savePayslipComparison);
   $('#clearPayslipBtn').addEventListener('click', clearPayslipComparison);
   document.querySelectorAll('[data-view]').forEach(btn => {
@@ -1344,14 +1426,250 @@ function render(){
   main.classList.toggle('shifts-active', activeTab === 'shifts');
   main.classList.toggle('today-active', activeTab === 'today');
   document.getElementById('payslipDetails')?.addEventListener('toggle', ev => { payslipOpen = ev.target.open; });
+  animateNetHero();
+  if(activeTab === 'insights') renderInsights();
+  animateNext = false;
   restoreTabScroll();
+}
+
+function animateNetHero(){
+  const el = document.getElementById('netHero');
+  if(!el) return;
+  const to = Number(el.dataset.value), from = lastNetShown;
+  lastNetShown = to;
+  if(from === null || from === to || reducedMotion()) return;
+  const t0 = performance.now(), dur = 600;
+  const step = now => {
+    if(!el.isConnected) return;
+    const p = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+    el.textContent = fmtMoney(from + (to - from) * e);
+    if(p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function setEntryTag(tag){
+  entryTagValue = TAG_LABELS[tag] ? tag : '';
+  document.querySelectorAll('#entryTags [data-tag]').forEach(b => b.classList.toggle('on', b.dataset.tag === entryTagValue));
+}
+
+let insightsRequestId = 0;
+async function renderInsights(){
+  const box = document.getElementById('insightsBody');
+  if(!box) return;
+  const requestId = ++insightsRequestId;
+  const userId = currentUserId;
+  const summarySettings = deepClone(settings);
+  box.innerHTML = '<p class="insights-empty">טוען סיכום…</p>';
+  let all = {};
+  try{ all = await getAllMonthsData(); }
+  catch(e){
+    console.error('insights failed', e);
+    if(box.isConnected && requestId === insightsRequestId && userId === currentUserId){
+      box.innerHTML = '<p class="insights-empty" role="status">לא ניתן לטעון את הסיכום. בדוק חיבור ונסה שוב.</p><button type="button" id="retryInsights">נסה שוב</button>';
+      document.getElementById('retryInsights')?.addEventListener('click', renderInsights);
+    }
+    return;
+  }
+  if(!box.isConnected || requestId !== insightsRequestId || userId !== currentUserId) return;
+  const nowKey = monthKey(new Date());
+  const rows = Object.keys(all).filter(mk => Object.keys(all[mk]?.days || {}).length).sort().slice(-6).map(mk => {
+    const md = { days:{}, ...(all[mk] || {}) };
+    try{
+      const c = AttendanceCalc.computeMonth(md, summarySettings);
+      const workedDays = Object.entries(md.days).filter(([d, e]) => e && e.type !== 'sick' && c.perDay[d].total > 0);
+      return { mk, hours:c.rawTotal, worked:workedDays.length,
+        workHours:workedDays.reduce((sum, [d]) => sum + c.perDay[d].total, 0), days:Object.fromEntries(workedDays) };
+    }catch(e){ return null; }
+  }).filter(Boolean);
+  if(!rows.length){ box.innerHTML = '<div class="empty-state">עדיין אין נתונים לסיכום.</div>'; return; }
+  const toMin = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + m; };
+  const ins = [], outs = [];
+  rows.forEach(r => Object.values(r.days).forEach(e => {
+    if(!e || e.type === 'sick' || !e.in || !e.out) return;
+    const a = toMin(e.in), b = toMin(e.out);
+    if(Number.isFinite(a) && Number.isFinite(b)){ ins.push(a); outs.push(b < a ? b + 1440 : b); }
+  }));
+  const avg = list => list.length ? list.reduce((x, y) => x + y, 0) / list.length : null;
+  const clock = m => { if(m === null) return '—'; const t = Math.round(m) % 1440; return `${String(Math.floor(t / 60)).padStart(2,'0')}:${String(t % 60).padStart(2,'0')}`; };
+  const cur = rows.find(r => r.mk === nowKey);
+  const max = Math.max(...rows.map(r => r.hours), 1);
+  const days = rows.reduce((x, r) => x + r.worked, 0), hours = rows.reduce((x, r) => x + r.workHours, 0);
+  box.innerHTML = `
+    <section class="insight-card">
+      <h2>שעות לפי חודש</h2>
+      <div class="bars">${rows.map(r => `
+        <div class="bar-col${r.mk === nowKey ? ' current' : ''}">
+          <span class="bar-val mono">${fmtHours(r.hours)}</span>
+          <div class="bar-track"><div class="bar-fill" style="height:${Math.max(4, r.hours / max * 100)}%"></div></div>
+          <span class="bar-label">${HE_MONTHS[Number(r.mk.slice(5, 7)) - 1].slice(0, 3)} ${r.mk.slice(2, 4)}</span>
+        </div>`).join('')}
+      </div>
+    </section>
+    <section class="insight-grid">
+      <div class="ledger-stat"><span class="stat-label">ימי עבודה החודש</span><span class="stat-value mono">${cur ? cur.worked : 0}</span></div>
+      <div class="ledger-stat"><span class="stat-label">ממוצע שעות ליום</span><span class="stat-value mono">${days ? fmtHours(hours / days) : '—'}</span></div>
+      <div class="ledger-stat"><span class="stat-label">כניסה ממוצעת</span><span class="stat-value mono">${clock(avg(ins))}</span></div>
+      <div class="ledger-stat"><span class="stat-label">יציאה ממוצעת</span><span class="stat-value mono">${clock(avg(outs))}</span></div>
+    </section>
+    <p class="settings-note">מבוסס על ${rows.length} החודשים האחרונים עם נתונים.</p>`;
+}
+
+// Home-screen shortcut / link: ?action=clockin | clockout. Never clocks automatically:
+// it only points at the button, because the app confirms with a long press.
+function handleLaunchAction(){
+  let action = null;
+  try{
+    const url = new URL(location.href);
+    action = url.searchParams.get('action');
+    if(!action) return;
+    url.searchParams.delete('action');
+    history.replaceState(null, '', url.pathname + url.search + url.hash);
+  }catch(e){ return; }
+  if(action !== 'clockin' && action !== 'clockout') return;
+  if(activeTab !== 'today') switchTab('today');
+  const btn = document.getElementById(action === 'clockin' ? 'clockInBtn' : 'clockOutBtn');
+  if(!btn){ showToast(action === 'clockin' ? 'כבר יש משמרת פעילה' : 'אין משמרת פעילה'); return; }
+  btn.classList.add('nudge');
+  setTimeout(() => btn.classList.remove('nudge'), 3600);
+  showToast('החזק לחיצה על הכפתור כדי לאשר');
+}
+
+function setBusyBar(on, dim = false){
+  document.getElementById('topProgress')?.classList.toggle('on', !!on || monthChangeBusy);
+  const main = document.getElementById('mainContent');
+  main?.classList.toggle('month-loading', monthChangeBusy || (!!on && dim));
+  if(main) main.inert = monthChangeBusy || (!!on && dim);
+}
+
+function emptyStateHTML(){
+  return `<div class="empty-state">
+    <svg class="empty-ill" viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="12" width="48" height="44" rx="8"/><path d="M8 26h48M20 6v10M44 6v10"/><circle cx="32" cy="42" r="7"/><path d="M32 38v4l3 2"/></svg>
+    <strong>אין עדיין משמרות החודש</strong>
+    <span>החתמה על כניסה תופיע כאן, או שאפשר להוסיף יום ידנית.</span>
+    <button type="button" id="emptyAddBtn" class="empty-cta">הוספת יום</button>
+  </div>`;
+}
+
+// Swipe a row toward the delete side (right, in RTL). Touch only; desktop keeps the ✕ button.
+function wireSwipeRows(){
+  document.querySelectorAll('.swipe-wrap').forEach(wrap => {
+    const row = wrap.querySelector('.entry-row');
+    if(!row) return;
+    let sx = 0, sy = 0, dx = 0, active = false, locked = false, crossed = false;
+    const set = x => { row.style.transform = x ? `translateX(${x}px)` : ''; wrap.style.setProperty('--sw', (x / 90).toFixed(2)); };
+    row.addEventListener('click', ev => { if(row._swiped && !ev.target.closest('.entry-del')){ ev.stopImmediatePropagation(); ev.preventDefault(); } }, true);
+    row.addEventListener('pointerdown', ev => {
+      if(ev.pointerType === 'mouse' || ev.target.closest('.entry-del')) return;
+      sx = ev.clientX; sy = ev.clientY; dx = 0; active = true; locked = false; crossed = false;
+    });
+    row.addEventListener('pointermove', ev => {
+      if(!active) return;
+      const mx = ev.clientX - sx, my = ev.clientY - sy;
+      if(!locked){
+        if(Math.abs(my) > 10 && Math.abs(my) > Math.abs(mx)){ active = false; return; }
+        if(Math.abs(mx) > 10 && Math.abs(mx) > Math.abs(my)){ locked = true; row.setPointerCapture?.(ev.pointerId); row.style.transition = 'none'; }
+        else return;
+      }
+      dx = Math.max(0, Math.min(140, mx));
+      set(dx);
+      if(!crossed && dx > 90){ crossed = true; softHaptic(); } else if(crossed && dx <= 90) crossed = false;
+    });
+    const end = ev => {
+      if(!active) return;
+      active = false;
+      if(!locked) return;
+      row._swiped = true; setTimeout(() => { row._swiped = false; }, 350);
+      if(dx > 90 && ev.type !== 'pointercancel'){
+        row.style.transition = 'transform .2s ease, opacity .2s ease';
+        row.style.transform = 'translateX(110%)'; row.style.opacity = '0';
+        row.querySelector('.entry-del')?.click();
+      }else{
+        row.style.transition = '';
+        set(0);
+      }
+    };
+    row.addEventListener('pointerup', end);
+    row.addEventListener('pointercancel', end);
+  });
+}
+
+// Drag the editor sheet down by its handle/title to dismiss it.
+function wireSheetDrag(){
+  const overlay = document.getElementById('entryEditorOverlay');
+  const sheet = overlay?.querySelector('.entry-editor');
+  if(!sheet) return;
+  let startY = null, dy = 0;
+  const down = ev => { if((ev.button !== undefined && ev.button !== 0) || ev.target.closest('button')) return; startY = ev.clientY; dy = 0; sheet.style.transition = 'none'; ev.currentTarget.setPointerCapture?.(ev.pointerId); };
+  const move = ev => { if(startY === null) return; dy = Math.max(0, ev.clientY - startY); sheet.style.transform = `translateY(${dy}px)`; };
+  const up = ev => {
+    if(startY === null) return;
+    startY = null;
+    if(dy > 110 && ev.type !== 'pointercancel'){
+      sheet.style.transition = 'transform .2s ease-in';
+      sheet.style.transform = 'translateY(100%)';
+      clearTimeout(closeEntryTimer);
+      closeEntryTimer = setTimeout(() => { sheet.style.transform = ''; sheet.style.transition = ''; finishCloseEntryEditor(); }, 200);
+    }else{
+      sheet.style.transition = 'transform .25s cubic-bezier(.2,.82,.2,1)';
+      sheet.style.transform = '';
+    }
+    dy = 0;
+  };
+  overlay.querySelectorAll('.sheet-handle, .entry-editor-head').forEach(el => {
+    el.addEventListener('pointerdown', down); el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  });
+}
+
+// Pull down at the top of any screen to re-sync from the cloud.
+function setupPullToRefresh(){
+  const ptr = document.getElementById('ptr');
+  if(!ptr || ptr.dataset.ready) return;
+  ptr.dataset.ready = '1';
+  let sy = null, pull = 0, busy = false;
+  document.addEventListener('touchstart', ev => {
+    sy = null; pull = 0;
+    if(busy || !currentUserId || shiftActionBusy || monthChangeBusy || isUserEditing() || ev.touches.length !== 1 || window.scrollY > 0) return;
+    if(document.body.classList.contains('settings-open') || document.getElementById('mainContent')?.classList.contains('editor-open')) return;
+    if(ev.target.closest('input,select,textarea,.entry-editor-overlay,.settings-drawer')) return;
+    const scroller = tabScroller(activeTab);
+    if(scroller && scroller.scrollTop > 0) return;
+    sy = ev.touches[0].clientY; pull = 0;
+  }, { passive:true });
+  document.addEventListener('touchmove', ev => {
+    if(sy === null) return;
+    if(ev.touches.length !== 1){ sy = null; ptr.classList.remove('pulling', 'ready'); ptr.style.setProperty('--pull', 0); return; }
+    const dy = ev.touches[0].clientY - sy;
+    pull = dy > 0 ? Math.min(90, dy * 0.5) : 0;
+    ptr.classList.add('pulling');
+    ptr.style.setProperty('--pull', pull);
+    ptr.classList.toggle('ready', pull >= 60);
+  }, { passive:true });
+  const end = async ev => {
+    if(sy === null) return;
+    sy = null;
+    ptr.classList.remove('pulling');
+    if(pull < 60 || ev.type === 'touchcancel'){ ptr.style.setProperty('--pull', 0); ptr.classList.remove('ready'); return; }
+    busy = true; ptr.classList.add('loading'); ptr.style.setProperty('--pull', 52);
+    softHaptic();
+    let refreshed = false;
+    try{ refreshed = await refreshFromCloud(); }catch(e){ console.error('pull refresh failed', e); }
+    await new Promise(r => setTimeout(r, 400));
+    ptr.classList.remove('loading', 'ready'); ptr.style.setProperty('--pull', 0);
+    busy = false;
+    if(currentUserId) showToast(refreshed ? 'הנתונים עודכנו' : 'הרענון נכשל. בדוק חיבור ונסה שוב.');
+  };
+  document.addEventListener('touchend', end);
+  document.addEventListener('touchcancel', end);
 }
 
 function switchTab(tab){
   if((plannerOpen || plannerSaving) && tab !== activeTab){showToast('שמור או בטל את התכנון לפני מעבר למסך אחר');return;}
-  if(tab !== 'today' && tab !== 'shifts') return;
+  if(tab !== 'today' && tab !== 'shifts' && tab !== 'insights') return;
   saveTabScroll(); // remember the tab we are leaving
   activeTab = tab;
+  softHaptic();
   const main = $('#mainContent');
   main.classList.toggle('shifts-active', tab === 'shifts');
   main.classList.toggle('today-active', tab === 'today');
@@ -1363,6 +1681,12 @@ function switchTab(tab){
   document.querySelectorAll('[data-panel]').forEach(panel => {
     panel.hidden = panel.dataset.panel !== tab;
   });
+  document.querySelector('.tab-bar')?.setAttribute('data-active', tab);
+  const shown = document.querySelector(`[data-panel="${tab}"]`);
+  if(shown && !reducedMotion()){ shown.classList.remove('enter'); void shown.offsetWidth; shown.classList.add('enter'); }
+  const list = document.getElementById('entriesContainer');
+  if(list && tab === 'shifts'){ list.classList.remove('anim-list'); void list.offsetWidth; list.classList.add('anim-list'); }
+  if(tab === 'insights') renderInsights();
   restoreTabScroll(tab);
 }
 
@@ -1373,13 +1697,13 @@ function updateEntriesView(calc = computeMonth()){
   const container = document.getElementById('entriesContainer');
   if(!container) return;
   const dates = Object.keys(monthData.days).sort().reverse();
-  container.innerHTML = dates.length === 0
-    ? `<div class="empty-state">עדיין לא נרשמו ימי עבודה בחודש זה.<br>הוסיפו יום למעלה כדי להתחיל.</div>`
-    : (viewMode === 'calendar' ? buildCalendar(calc) : buildList(dates, calc));
+  container.classList.add('anim-list');
+  container.innerHTML = viewMode === 'calendar' ? buildCalendar(calc) : dates.length === 0 ? emptyStateHTML() : buildList(dates, calc);
   wireEntryInteractions();
 }
 
 function updateShiftBusy(){
+  setBusyBar(shiftActionBusy);
   const widget=document.querySelector('.shift-widget');
   if(!widget) return;
   widget.setAttribute('aria-busy', String(shiftActionBusy));
@@ -1472,11 +1796,22 @@ function updateEntryTypeUI(){
   const isSick = $('#entryType').value === 'sick';
   $('#entryWorkFields').hidden = isSick;
   $('#sickDayNote').hidden = !isSick;
+  const tags = $('#entryTags'); if(tags) tags.hidden = isSick;
 }
 
+let closeEntryTimer = null;
 function closeEntryEditor(){
   const overlay = document.getElementById('entryEditorOverlay');
-  if(overlay) overlay.hidden = true;
+  if(!overlay || overlay.hidden || reducedMotion()) return finishCloseEntryEditor();
+  overlay.classList.add('closing');
+  clearTimeout(closeEntryTimer);
+  closeEntryTimer = setTimeout(finishCloseEntryEditor, 220);
+}
+
+function finishCloseEntryEditor(){
+  clearTimeout(closeEntryTimer);
+  const overlay = document.getElementById('entryEditorOverlay');
+  if(overlay){ overlay.hidden = true; overlay.classList.remove('closing'); }
   document.getElementById('mainContent')?.classList.remove('editor-open');
   editorResolvesSession = false;
   flushPendingRender();
@@ -1484,6 +1819,7 @@ function closeEntryEditor(){
 
 function openEntryEditor(date = null, prefill = null){
   editorResolvesSession = !!(prefill && prefill.resolvesSession);
+  $('#entryNote').value = ''; setEntryTag('');
   if(prefill){
     $('#entryDate').value = prefill.date;
     $('#entryType').value = 'work';
@@ -1503,7 +1839,7 @@ function openEntryEditor(date = null, prefill = null){
   }
   $('#staleNote').hidden = !editorResolvesSession;
   const overlay = document.getElementById('entryEditorOverlay');
-  if(overlay) overlay.hidden = false;
+  if(overlay){ clearTimeout(closeEntryTimer); overlay.classList.remove('closing'); overlay.hidden = false; }
   document.getElementById('mainContent')?.classList.add('editor-open');
 }
 
@@ -1515,9 +1851,13 @@ function fillFormForDate(date){
   $('#entryIn').value = e?.type === 'sick' ? '' : (e?.in || '');
   $('#entryOut').value = e?.type === 'sick' ? '' : (e?.out || '');
   $('#entryBreak').value = e?.type === 'sick' ? 0 : (e?.brk || 0);
+  $('#entryNote').value = e?.note || '';
+  setEntryTag(e?.type === 'sick' ? '' : (e?.tag || ''));
 }
 
 function wireEntryInteractions(){
+  wireSwipeRows();
+  document.getElementById('emptyAddBtn')?.addEventListener('click', () => openEntryEditor());
   document.querySelectorAll('.entry-row').forEach(row => {
     row.addEventListener('click', (ev) => {
       if(ev.target.closest('.entry-del')) return;
@@ -1532,10 +1872,14 @@ function wireEntryInteractions(){
       ev.stopPropagation();
       const date = btn.dataset.del;
       const mk = date.slice(0, 7);
-      const removed = monthData.days[date];
+      let removed;
+      const rowEl = btn.closest('.entry-row');
+      rowEl?.classList.add('removing');
       try{
-        await mutateMonth(mk, m => { delete m.days[date]; });
+        await Promise.all([mutateMonth(mk, m => { removed = m.days[date]; delete m.days[date]; }), new Promise(r => setTimeout(r, 200))]);
       }catch(e){
+        rowEl?.classList.remove('removing');
+        if(rowEl){ rowEl.style.transform = ''; rowEl.style.opacity = ''; rowEl.style.transition = ''; }
         console.error('delete failed', e);
         showToast('המחיקה נכשלה. בדוק חיבור ונסה שוב.');
         return;
@@ -1543,7 +1887,10 @@ function wireEntryInteractions(){
       render();
       showToast('היום נמחק', { action: { label: 'ביטול', onClick: async () => {
         try{
-          await mutateMonth(mk, m => { m.days[date] = removed; });
+          await mutateMonth(mk, m => {
+            if(m.days[date]) throw new Error('A newer day entry already exists');
+            if(removed) m.days[date] = removed;
+          });
           render();
           showToast('המחיקה בוטלה');
         }catch(e){
@@ -1556,7 +1903,7 @@ function wireEntryInteractions(){
 }
 
 function buildList(dates, calc){
-  return dates.map(date => {
+  return dates.map((date, idx) => {
     const h = calc.perDay[date];
     const e = monthData.days[date];
     const day = date.split('-')[2];
@@ -1568,17 +1915,17 @@ function buildList(dates, calc){
     const chips = isSick
       ? `<span class="chip sick">מחלה · ${fmtHours(h.total)} ש׳</span>`
       : `${h.regular>0?`<span class="chip regular">${fmtHours(h.regular)}</span>`:''}${h.ot125>0?`<span class="chip ot125">${fmtHours(h.ot125)}</span>`:''}${h.ot150>0?`<span class="chip ot150">${fmtHours(h.ot150)}</span>`:''}`;
-    return `<div class="entry-row ${isSick ? 'sick-entry-row' : ''}" data-date="${date}">
+    return `<div class="swipe-wrap"><div class="swipe-bg" aria-hidden="true">${ICONS.trash}מחק</div><div class="entry-row ${isSick ? 'sick-entry-row' : ''}" data-date="${date}" style="--i:${Math.min(idx, 14)}">
       <div class="entry-row-top">
         <div class="entry-main">
           <div class="entry-date">${weekday} · ${day}.${String(currentDate.getMonth()+1).padStart(2,'0')}</div>
-          <div class="entry-time">${dayTime}</div>
+          <div class="entry-time">${dayTime}</div>${e.note ? `<div class="entry-note">${escapeHtml(e.note)}</div>` : ''}
         </div>
         <div class="entry-pay mono">${fmtMoney(h.pay)}</div>
         <button class="entry-del" data-del="${date}" aria-label="מחק">✕</button>
       </div>
-      <div class="entry-chips">${chips}</div>
-    </div>`;
+      <div class="entry-chips">${chips}${e.tag && TAG_LABELS[e.tag] ? `<span class="chip tag">${TAG_LABELS[e.tag]}</span>` : ''}</div>
+    </div></div>`;
   }).join('');
 }
 
@@ -1589,6 +1936,7 @@ function buildCalendar(calc){
   const daysInMonth = new Date(year, month+1, 0).getDate();
   const todayString = todayStr();
   const weekdayLabels = ['א','ב','ג','ד','ה','ו','ש'];
+  const refHours = Number(settings.regularHours) > 0 ? Number(settings.regularHours) : 8;
 
   let cells = '';
   for(let i=0;i<firstWeekday;i++){
@@ -1604,8 +1952,8 @@ function buildCalendar(calc){
     if(hasEntry) cls += ' has-entry';
     if(hasEntry && e.type === 'sick') cls += ' sick-day';
     if(isToday) cls += ' today';
-    cells += `<div class="${cls}" data-date="${date}">
-      <span class="cal-day-num">${d}</span>
+    cells += `<div class="${cls}" data-date="${date}" style="--i:${d};--heat:${hasEntry ? (e.type === 'sick' ? 0.35 : Math.min(1, h.total / refHours)).toFixed(2) : 0}">
+      <span class="cal-day-num">${d}</span>${hasEntry && (e.note || e.tag) ? '<span class="cal-note-dot"></span>' : ''}
       ${hasEntry && e.type === 'sick' ? '<span class="cal-sick-mark">מ</span>' : ''}
       ${hasEntry ? `
         <div class="cal-bar">
@@ -1627,7 +1975,7 @@ function buildCalendar(calc){
 function escapeHtml(str){
   const div = document.createElement('div');
   div.textContent = str;
-  return div.innerHTML;
+  return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 async function onAddEntry(ev){
@@ -1649,6 +1997,9 @@ async function onAddEntry(ev){
   const submitBtn = ev.submitter || document.querySelector('#entryForm button[type="submit"]');
   if(submitBtn) submitBtn.disabled = true;
   const entry = type === 'sick' ? { type:'sick' } : { type:'work', in:inT, out:outT, brk };
+  const note = ($('#entryNote').value || '').trim().slice(0, 80);
+  if(note) entry.note = note;
+  if(type === 'work' && entryTagValue) entry.tag = entryTagValue;
   try{
     await mutateMonth(date.slice(0, 7), m => { m.days[date] = entry; });
     if(editorResolvesSession && activeSession) await closeActiveSession(activeSession);
@@ -1664,7 +2015,7 @@ async function onAddEntry(ev){
   }catch(e){
     // the editor stays open with everything the user typed
     console.error('save entry failed', e);
-    showToast('השמירה נכשלה. בדוק חיבור ונסה שוב.');
+    showToast(e.userMessage || 'השמירה נכשלה. בדוק חיבור ונסה שוב.');
   }finally{
     if(submitBtn) submitBtn.disabled = false;
   }
@@ -1700,35 +2051,53 @@ async function clearPayslipComparison(){
   showToast('ההשוואה נוקתה');
 }
 
+let monthChangeBusy = false;
 async function changeMonth(delta){
-  const previous = currentDate;
-  currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth()+delta, 1);
-  showDataLoader();
+  if(monthChangeBusy || shiftActionBusy || plannerOpen || plannerSaving) return;
+  monthChangeBusy = true;
+  const target = new Date(currentDate.getFullYear(), currentDate.getMonth()+delta, 1);
+  const userId = currentUserId;
+  softHaptic();
+  setBusyBar(true, true);
   try{
-    await loadMonth(currentDate);
+    const mk = monthKey(target);
+    const [saved, payslip] = await Promise.all([kvGetStrict(`attendance:${mk}`), kvGetStrict(`payslip:${mk}`)]);
+    if(userId !== currentUserId) return;
+    currentDate = target;
+    monthData = saved || { days:{} };
+    payslipActual = normalizePayslip(payslip);
+    writeInitialCache(userId);
+    animateNext = true;
     render();
   }catch(e){
     console.error('changeMonth failed', e);
-    currentDate = previous; // never show another month's label over stale data
     showToast('לא ניתן לטעון את החודש. בדוק חיבור.');
   }finally{
-    hideDataLoader();
+    monthChangeBusy = false;
+    setBusyBar(false);
   }
 }
 
 // ---- settings drawer ----
+let settingsDraft = null;
+let settingsSaving = false;
 function renderDeductionRows(){
   const wrap = $('#deductionsSettings');
-  wrap.innerHTML = settings.deductions.map((d,i) => `
+  const draft = settingsDraft || settings;
+  wrap.innerHTML = draft.deductions.map((d,i) => `
     <div class="deduction-row" data-idx="${i}">
       <input type="text" value="${escapeHtml(d.name)}" data-field="name">
       <input type="number" value="${d.percent}" step="0.1" data-field="percent">
       <button type="button" data-remove="${i}">✕</button>
     </div>
   `).join('');
+  wrap.querySelectorAll('input[data-field]').forEach(input => input.addEventListener('input', () => {
+    const item = draft.deductions[Number(input.closest('.deduction-row').dataset.idx)];
+    item[input.dataset.field] = input.dataset.field === 'percent' ? Number(input.value) : input.value;
+  }));
   wrap.querySelectorAll('[data-remove]').forEach(btn => {
     btn.addEventListener('click', () => {
-      settings.deductions.splice(Number(btn.dataset.remove),1);
+      draft.deductions.splice(Number(btn.dataset.remove),1);
       renderDeductionRows();
     });
   });
@@ -1736,16 +2105,21 @@ function renderDeductionRows(){
 
 function renderAdditionRows(){
   const wrap = $('#additionsSettings');
-  wrap.innerHTML = settings.additions.map((a,i) => `
+  const draft = settingsDraft || settings;
+  wrap.innerHTML = draft.additions.map((a,i) => `
     <div class="deduction-row" data-idx="${i}">
       <input type="text" value="${escapeHtml(a.name)}" data-field="name">
       <input type="number" value="${a.amount}" step="1" data-field="amount">
       <button type="button" data-remove="${i}">✕</button>
     </div>
   `).join('');
+  wrap.querySelectorAll('input[data-field]').forEach(input => input.addEventListener('input', () => {
+    const item = draft.additions[Number(input.closest('.deduction-row').dataset.idx)];
+    item[input.dataset.field] = input.dataset.field === 'amount' ? Number(input.value) : input.value;
+  }));
   wrap.querySelectorAll('[data-remove]').forEach(btn => {
     btn.addEventListener('click', () => {
-      settings.additions.splice(Number(btn.dataset.remove),1);
+      draft.additions.splice(Number(btn.dataset.remove),1);
       renderAdditionRows();
     });
   });
@@ -1761,6 +2135,7 @@ function updateThemeButtonsUI(){
 }
 
 function openSettings(){
+  settingsDraft = deepClone(settings);
   $('#setRate').value = settings.hourlyRate;
   $('#setRegularHours').value = settings.regularHours;
   $('#setSickDayHours').value = settings.sickDayHours ?? 0;
@@ -1786,6 +2161,8 @@ function openSettings(){
   });
 }
 function closeSettings(){
+  if(settingsSaving) return;
+  settingsDraft = null;
   $('#settingsDrawer').classList.remove('open');
   document.body.classList.remove('settings-open');
   window.setTimeout(() => {
@@ -1795,18 +2172,20 @@ function closeSettings(){
 
 document.querySelectorAll('.theme-mode-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
-    settings.themeMode = btn.dataset.mode;
-    applyTheme();
-    updateThemeButtonsUI();
-    await kvSet('settings', settings);
+    if(settingsSaving) return;
+    settingsSaving = true;
+    try{ await saveSettingsToStorage({ themeMode: btn.dataset.mode }); updateThemeButtonsUI(); }
+    catch(e){ console.error('theme save failed', e); showToast('המראה לא נשמר. בדוק חיבור ונסה שוב.'); }
+    finally{ settingsSaving = false; }
   });
 });
 document.querySelectorAll('.accent-swatch').forEach(btn => {
   btn.addEventListener('click', async () => {
-    settings.accentColor = btn.dataset.accent;
-    applyTheme();
-    updateThemeButtonsUI();
-    await kvSet('settings', settings);
+    if(settingsSaving) return;
+    settingsSaving = true;
+    try{ await saveSettingsToStorage({ accentColor: btn.dataset.accent }); updateThemeButtonsUI(); }
+    catch(e){ console.error('accent save failed', e); showToast('הצבע לא נשמר. בדוק חיבור ונסה שוב.'); }
+    finally{ settingsSaving = false; }
   });
 });
 
@@ -1846,14 +2225,15 @@ document.addEventListener('keydown', (ev) => {
   if(ev.key === 'Escape' && $('#settingsDrawer').classList.contains('open')) closeSettings();
 });
 $('#addDeduction').addEventListener('click', () => {
-  settings.deductions.push({ id: 'd'+Date.now(), name:'רכיב חדש', percent:0 });
+  settingsDraft.deductions.push({ id: 'd'+Date.now(), name:'רכיב חדש', percent:0 });
   renderDeductionRows();
 });
 $('#addAddition').addEventListener('click', () => {
-  settings.additions.push({ id: 'a'+Date.now(), name:'תוספת חדשה', amount:0 });
+  settingsDraft.additions.push({ id: 'a'+Date.now(), name:'תוספת חדשה', amount:0 });
   renderAdditionRows();
 });
 $('#saveSettings').addEventListener('click', async () => {
+  if(settingsSaving) return;
   const num = id => Number($(id).value);
   const next = {
     hourlyRate: num('#setRate'),
@@ -1866,12 +2246,12 @@ $('#saveSettings').addEventListener('click', async () => {
     checkOutRepeatMinutes: num('#setCheckOutRepeatMinutes') || 0
   };
   const deductions = [...document.querySelectorAll('#deductionsSettings .deduction-row')].map((row,i) => ({
-    ...settings.deductions[i],
+    ...settingsDraft.deductions[i],
     name: row.querySelector('[data-field="name"]').value || 'רכיב',
     percent: Number(row.querySelector('[data-field="percent"]').value) || 0
   }));
   const additions = [...document.querySelectorAll('#additionsSettings .deduction-row')].map((row,i) => ({
-    ...settings.additions[i],
+    ...settingsDraft.additions[i],
     name: row.querySelector('[data-field="name"]').value || 'תוספת',
     amount: Number(row.querySelector('[data-field="amount"]').value) || 0
   }));
@@ -1886,15 +2266,21 @@ $('#saveSettings').addEventListener('click', async () => {
     additions.some(a => a.amount < 0) ? 'סכום תוספת לא יכול להיות שלילי' : null;
   if(problem){ showToast(problem); return; }
 
-  Object.assign(settings, next);
-  settings.attendanceRemindersEnabled = $('#setAttendanceReminders').value === 'on';
-  settings.checkOutReminderTime = $('#setCheckOutReminderTime').value || '16:00';
-  settings.deductions = deductions;
-  settings.additions = additions;
-  await saveSettingsToStorage();
-  await refreshAttendanceReminderSchedule();
-  closeSettings();
-  render();
+  next.attendanceRemindersEnabled = $('#setAttendanceReminders').value === 'on';
+  next.checkOutReminderTime = $('#setCheckOutReminderTime').value || '16:00';
+  next.deductions = deductions;
+  next.additions = additions;
+  settingsSaving = true;
+  $('#saveSettings').disabled = true;
+  try{
+    await saveSettingsToStorage(next);
+    await refreshAttendanceReminderSchedule();
+    settingsSaving = false;
+    closeSettings();
+    render();
+    showToast('ההגדרות נשמרו');
+  }catch(e){ console.error('settings save failed', e); showToast('ההגדרות לא נשמרו. בדוק חיבור ונסה שוב.'); }
+  finally{ settingsSaving = false; $('#saveSettings').disabled = false; }
 });
 $('#resetData').addEventListener('click', async () => {
   if(!confirm('לאפס את כל נתוני הנוכחות והשכר לחודש הנוכחי? פעולה זו לא ניתנת לביטול.')) return;
@@ -2029,6 +2415,8 @@ function startShiftTicker(){
 
 function showReadyApp(){
   revealApp();
+  setupPullToRefresh();
+  animateNext = true;
   render();
   startShiftTicker();
 }
@@ -2052,9 +2440,10 @@ async function startApp(session){
 
     try{
       const before = dataFingerprint();
-      await loadInitialData(userId);
+      if(!await loadInitialData(userId)) return;
       if(dataFingerprint() !== before) renderUnlessEditing();
       refreshAttendanceReminderSchedule();
+      handleLaunchAction();
     }catch(e){
       console.error('background refresh failed', e);
     }
@@ -2063,11 +2452,13 @@ async function startApp(session){
 
   showDataLoader();
   try{
-    await loadInitialData(userId);
+    if(!await loadInitialData(userId)) return;
     showReadyApp();
     refreshAttendanceReminderSchedule();
+    handleLaunchAction();
   }catch(e){
     console.error('startApp error', e);
+    if(userId !== currentUserId) return;
     settings = normalizeSettings(settings);
     showReadyApp();
     showToast('לא הצלחנו לטעון את הנתונים. נסה לרענן.');
@@ -2077,11 +2468,18 @@ async function startApp(session){
 }
 
 function resetSignedOutState(){
+  lastNetShown = null;
   // the cached snapshot holds pay data: don't leave it behind on a shared device
   try{
     Object.keys(localStorage).filter(k => k.startsWith('nc_initial:')).forEach(k => localStorage.removeItem(k));
   }catch(e){ /* localStorage unavailable */ }
   currentUserId = null;
+  settingsDraft = null;
+  settingsSaving = false;
+  plannerOpen = false;
+  document.body.classList.remove('settings-open');
+  $('#settingsDrawer').classList.remove('open');
+  $('#drawerOverlay').hidden = true;
   earlierEntryDraft = null;
   appStarted = false;
   settings = null;
@@ -2094,15 +2492,18 @@ function resetSignedOutState(){
 
 let foregroundRefreshPromise = null;
 async function refreshFromCloud(){
-  if(!appStarted || !currentUserId) return;
+  if(!appStarted || !currentUserId || shiftActionBusy || monthChangeBusy) return false;
   if(foregroundRefreshPromise) return foregroundRefreshPromise;
+  const userId = currentUserId;
   foregroundRefreshPromise = (async () => {
     try{
       const before = dataFingerprint();
-      await loadInitialData(currentUserId);
+      if(!await loadInitialData(userId)) return false;
       if(dataFingerprint() !== before) renderUnlessEditing();
+      return true;
     }catch(e){
       console.error('foreground refresh failed', e);
+      return false;
     }finally{
       await cleanupRetiredReception();
       foregroundRefreshPromise = null;
